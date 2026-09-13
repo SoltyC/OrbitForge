@@ -21,16 +21,110 @@ function hash(x: number, y: number, z: number, seed: number): number {
   return (h ^ (h >>> 16)) >>> 0;
 }
 
-/** Hash to a float in [0, 1). */
-function hashUnit(x: number, y: number, z: number, seed: number): number {
-  return hash(x, y, z, seed) / 4294967296;
-}
-
 /** Wrap a lattice coordinate into [0, period). */
 function wrap(value: number, period: number): number {
   const m = value % period;
   return m < 0 ? m + period : m;
 }
+
+/**
+ * Lattice caches.
+ *
+ * Both noises hash the same lattice points over and over: eight corners per
+ * Perlin sample, twenty-seven cells per Worley sample, and again for every
+ * octave. Because the noise tiles, there are only `period^3` distinct lattice
+ * points however far the sampling ranges — so the hashes are worth computing
+ * once and reading back.
+ *
+ * This matters because baking the shape texture evaluates a four-octave Perlin
+ * and a three-octave Worley at each of 128^3 texels. Hashing it all afresh
+ * takes the better part of a minute; from a table it is a few seconds.
+ *
+ * The tables hold exactly what the hashes produced, so the noise is unchanged
+ * — that is asserted directly in the tests, against values computed the long
+ * way round.
+ */
+const MAX_CACHED_LATTICES = 32;
+
+interface Lattice<T> {
+  period: number;
+  seed: number;
+  table: T;
+}
+
+/**
+ * Caches are scanned linearly rather than keyed through a Map.
+ *
+ * That looks like a step backwards and is not: a Map needs a key, and building
+ * one — `${period}:${seed}` — allocates a string on every sample. At a few
+ * hundred million samples per bake that allocation cost more than all the
+ * hashing it was introduced to avoid, and measurably so. A handful of
+ * (period, seed) pairs are ever live, so comparing two numbers against a short
+ * array is both faster and simpler.
+ */
+const worleyLattices: Lattice<Float64Array>[] = [];
+const perlinLattices: Lattice<Uint8Array>[] = [];
+
+function findLattice<T>(
+  cache: Lattice<T>[],
+  period: number,
+  seed: number,
+): T | null {
+  for (let i = 0; i < cache.length; i++) {
+    const entry = cache[i]!;
+    if (entry.period === period && entry.seed === seed) return entry.table;
+  }
+  return null;
+}
+
+function worleyLattice(period: number, seed: number): Float64Array {
+  const cached = findLattice(worleyLattices, period, seed);
+  if (cached) return cached;
+
+  const table = new Float64Array(period * period * period * 3);
+  let i = 0;
+  for (let z = 0; z < period; z++) {
+    for (let y = 0; y < period; y++) {
+      for (let x = 0; x < period; x++) {
+        table[i++] = hash(x, y, z, seed) / 4294967296;
+        table[i++] = hash(x, y, z, seed + 1) / 4294967296;
+        table[i++] = hash(x, y, z, seed + 2) / 4294967296;
+      }
+    }
+  }
+
+  if (worleyLattices.length >= MAX_CACHED_LATTICES) worleyLattices.length = 0;
+  worleyLattices.push({ period, seed, table });
+  return table;
+}
+
+function perlinLattice(period: number, seed: number): Uint8Array {
+  const cached = findLattice(perlinLattices, period, seed);
+  if (cached) return cached;
+
+  const table = new Uint8Array(period * period * period);
+  let i = 0;
+  for (let z = 0; z < period; z++) {
+    for (let y = 0; y < period; y++) {
+      for (let x = 0; x < period; x++) {
+        table[i++] = hash(x, y, z, seed) % 12;
+      }
+    }
+  }
+
+  if (perlinLattices.length >= MAX_CACHED_LATTICES) perlinLattices.length = 0;
+  perlinLattices.push({ period, seed, table });
+  return table;
+}
+
+/**
+ * Reused scratch for the wrapped lattice coordinates of a Worley
+ * neighbourhood. Allocating three arrays per sample would show up in the bake;
+ * the noise stays pure regardless, since the contents never outlive a call.
+ */
+const WRAP_SCRATCH_X = new Int32Array(3);
+const WRAP_SCRATCH_Y = new Int32Array(3);
+const WRAP_SCRATCH_Z = new Int32Array(3);
 
 /** Quintic smoothstep: zero first and second derivatives at the ends. */
 function fade(t: number): number {
@@ -88,20 +182,36 @@ export function perlin3(
   const v = fade(yf);
   const w = fade(zf);
 
-  const corner = (dx: number, dy: number, dz: number): number => {
-    const h = hash(
-      wrap(xi + dx, period),
-      wrap(yi + dy, period),
-      wrap(zi + dz, period),
-      seed,
-    );
-    return gradientDot(h, xf - dx, yf - dy, zf - dz);
-  };
+  // The eight corners share six wrapped lattice coordinates between them, and
+  // their gradients come from the table rather than from a fresh hash.
+  const table = perlinLattice(period, seed);
+  const p2 = period * period;
 
-  const x00 = lerp(corner(0, 0, 0), corner(1, 0, 0), u);
-  const x10 = lerp(corner(0, 1, 0), corner(1, 1, 0), u);
-  const x01 = lerp(corner(0, 0, 1), corner(1, 0, 1), u);
-  const x11 = lerp(corner(0, 1, 1), corner(1, 1, 1), u);
+  const wx0 = wrap(xi, period);
+  const wy0 = wrap(yi, period);
+  const wz0 = wrap(zi, period);
+  const wx1 = wx0 + 1 === period ? 0 : wx0 + 1;
+  const wy1 = wy0 + 1 === period ? 0 : wy0 + 1;
+  const wz1 = wz0 + 1 === period ? 0 : wz0 + 1;
+
+  const ry0 = wy0 * period;
+  const ry1 = wy1 * period;
+  const rz0 = wz0 * p2;
+  const rz1 = wz1 * p2;
+
+  const g000 = gradientDot(table[rz0 + ry0 + wx0]!, xf, yf, zf);
+  const g100 = gradientDot(table[rz0 + ry0 + wx1]!, xf - 1, yf, zf);
+  const g010 = gradientDot(table[rz0 + ry1 + wx0]!, xf, yf - 1, zf);
+  const g110 = gradientDot(table[rz0 + ry1 + wx1]!, xf - 1, yf - 1, zf);
+  const g001 = gradientDot(table[rz1 + ry0 + wx0]!, xf, yf, zf - 1);
+  const g101 = gradientDot(table[rz1 + ry0 + wx1]!, xf - 1, yf, zf - 1);
+  const g011 = gradientDot(table[rz1 + ry1 + wx0]!, xf, yf - 1, zf - 1);
+  const g111 = gradientDot(table[rz1 + ry1 + wx1]!, xf - 1, yf - 1, zf - 1);
+
+  const x00 = lerp(g000, g100, u);
+  const x10 = lerp(g010, g110, u);
+  const x01 = lerp(g001, g101, u);
+  const x11 = lerp(g011, g111, u);
 
   const y0 = lerp(x00, x10, v);
   const y1 = lerp(x01, x11, v);
@@ -130,26 +240,39 @@ export function worley3(
 
   let nearest = Infinity;
 
+  const table = worleyLattice(period, seed);
+  const p2 = period * period;
+
+  // The 27 cells only ever use three wrapped coordinates per axis, so they are
+  // wrapped once per axis rather than once per cell.
+  const wxs = WRAP_SCRATCH_X;
+  const wys = WRAP_SCRATCH_Y;
+  const wzs = WRAP_SCRATCH_Z;
+  for (let d = 0; d < 3; d++) {
+    wxs[d] = wrap(xi + d - 1, period);
+    wys[d] = wrap(yi + d - 1, period);
+    wzs[d] = wrap(zi + d - 1, period);
+  }
+
   // One feature point per cell; the 27-cell neighbourhood is enough to find
   // the nearest, since a point cannot be closer than its own cell's diagonal.
   for (let dz = -1; dz <= 1; dz++) {
+    const cz = zi + dz;
+    const rz = wzs[dz + 1]! * p2;
+
     for (let dy = -1; dy <= 1; dy++) {
+      const cy = yi + dy;
+      const ry = wys[dy + 1]! * period;
+
       for (let dx = -1; dx <= 1; dx++) {
         const cx = xi + dx;
-        const cy = yi + dy;
-        const cz = zi + dz;
+        const base = (rz + ry + wxs[dx + 1]!) * 3;
 
-        const wx = wrap(cx, period);
-        const wy = wrap(cy, period);
-        const wz = wrap(cz, period);
+        const ex = cx + table[base]! - x;
+        const ey = cy + table[base + 1]! - y;
+        const ez = cz + table[base + 2]! - z;
 
-        const fx = cx + hashUnit(wx, wy, wz, seed);
-        const fy = cy + hashUnit(wx, wy, wz, seed + 1);
-        const fz = cz + hashUnit(wx, wy, wz, seed + 2);
-
-        const distanceSq =
-          (fx - x) * (fx - x) + (fy - y) * (fy - y) + (fz - z) * (fz - z);
-
+        const distanceSq = ex * ex + ey * ey + ez * ez;
         if (distanceSq < nearest) nearest = distanceSq;
       }
     }

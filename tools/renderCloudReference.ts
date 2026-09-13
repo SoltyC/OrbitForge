@@ -6,7 +6,13 @@
  * will actually be seen: cloud luminance is sunlight scattered towards the
  * eye, and cloud transmittance is what the sky behind them keeps.
  *
+ * Renders from the *baked* noise textures by default, because that is what
+ * ships — the shader has no other option. Pass `--analytic` to render the
+ * unbaked field instead; the two should be hard to tell apart, and the
+ * difference between them is reported either way.
+ *
  *   npx vite-node tools/renderCloudReference.ts
+ *   npx vite-node tools/renderCloudReference.ts --analytic
  */
 import { writeFileSync } from 'node:fs';
 import { createAtmosphereModel } from '../src/atmosphere/model.js';
@@ -15,9 +21,14 @@ import { integrateScattering } from '../src/atmosphere/scattering.js';
 import { buildTransmittanceLut } from '../src/atmosphere/transmittance.js';
 import type { TransmittanceLut } from '../src/atmosphere/transmittance.js';
 import { TERRIN } from '../src/bodies/system.js';
-import { DEFAULT_CLOUD_LAYER } from '../src/clouds/density.js';
-import type { CloudLayer } from '../src/clouds/density.js';
+import {
+  DEFAULT_CLOUD_LAYER,
+  analyticNoise,
+  bakedNoise,
+} from '../src/clouds/density.js';
+import type { CloudLayer, CloudNoiseSource } from '../src/clouds/density.js';
 import { marchClouds } from '../src/clouds/march.js';
+import { bakeCloudTexturesSync } from '../src/clouds/textures.js';
 import { encodePng } from './png.js';
 
 const PANEL_WIDTH = 340;
@@ -45,34 +56,64 @@ const PANELS: readonly Panel[] = [
 ];
 
 function main(): void {
+  const useAnalytic = process.argv.includes('--analytic');
+
   const atmosphere = createAtmosphereModel(TERRIN);
   if (!atmosphere) throw new Error('Terrin has no atmosphere');
 
   const lut = buildTransmittanceLut(atmosphere);
 
+  const layer: CloudLayer = {
+    ...DEFAULT_CLOUD_LAYER,
+    planetRadius: atmosphere.bottomRadius,
+  };
+
+  const bakeStart = Date.now();
+  const textures = bakeCloudTexturesSync(layer.seed);
+  console.log(`baked the noise textures in ${((Date.now() - bakeStart) / 1000).toFixed(1)} s`);
+
+  const noise = useAnalytic ? analyticNoise(layer.seed) : bakedNoise(textures);
+  console.log(`rendering from the ${useAnalytic ? 'analytic' : 'baked'} noise`);
+
   const width = PANEL_WIDTH * PANELS.length + GAP * (PANELS.length - 1);
   const pixels = new Uint8Array(width * PANEL_HEIGHT * 3);
 
   PANELS.forEach((panel, index) => {
-    renderPanel(atmosphere, lut, panel, pixels, width, index * (PANEL_WIDTH + GAP));
+    renderPanel(
+      atmosphere,
+      lut,
+      layer,
+      noise,
+      panel,
+      pixels,
+      width,
+      index * (PANEL_WIDTH + GAP),
+    );
   });
 
   writeFileSync('docs/cloud-reference.png', encodePng(width, PANEL_HEIGHT, pixels));
   console.log(`wrote docs/cloud-reference.png (${width}x${PANEL_HEIGHT})`);
+
+  reportBakeError(layer, textures);
 }
 
 function renderPanel(
   atmosphere: AtmosphereModel,
   lut: TransmittanceLut,
+  layer: CloudLayer,
+  noise: CloudNoiseSource,
   panel: Panel,
   pixels: Uint8Array,
   imageWidth: number,
   originX: number,
 ): void {
-  const layer: CloudLayer = { ...DEFAULT_CLOUD_LAYER, ...panel.layer };
+  const effective: CloudLayer = { ...layer, ...panel.layer };
   const r = atmosphere.bottomRadius + panel.altitude;
 
-  // Zenith is +Y here, to match the cloud model's (x, altitude, z) axes.
+  // Zenith is +Y here, so the camera sits on the +Y axis and the model's
+  // planet-centric positions and this panel's "altitude" agree.
+  const eye: Vec = [0, r, 0];
+
   const pitch = (panel.cameraPitch * Math.PI) / 180;
   const forward = normalise([Math.cos(pitch), Math.sin(pitch), 0]);
   const right: Vec = [0, 0, 1];
@@ -104,10 +145,11 @@ function renderPanel(
         nu: dot(direction, sun),
       });
 
-      const clouds = marchClouds(layer, {
-        origin: [0, panel.altitude, 0],
+      const clouds = marchClouds(effective, {
+        origin: eye,
         direction,
         sunDirection: sun,
+        noise,
         // Jitter by pixel, as the shader will, so banding is visible here too.
         jitter: blueNoise(x, y),
       });
@@ -135,6 +177,39 @@ function renderPanel(
 
   const coverage = ((100 * cloudPixels) / (PANEL_WIDTH * PANEL_HEIGHT)).toFixed(1);
   console.log(`${panel.label}: ${coverage}% of pixels show cloud`);
+}
+
+/**
+ * How far the baked noise strays from the analytic field.
+ *
+ * Reported at render time rather than left to the tests alone, because this is
+ * the number that decides whether the texture resolutions are big enough, and
+ * it is the one to look at first if the render and the reference disagree.
+ */
+function reportBakeError(
+  layer: CloudLayer,
+  textures: ReturnType<typeof bakeCloudTexturesSync>,
+): void {
+  const analytic = analyticNoise(layer.seed);
+  const baked = bakedNoise(textures);
+
+  let total = 0;
+  let max = 0;
+  const samples = 20_000;
+
+  for (let i = 0; i < samples; i++) {
+    const x = i * 0.6180339887;
+    const y = i * 0.4142135623;
+    const z = i * 0.7320508075;
+    const error = Math.abs(analytic.shape(x, y, z) - baked.shape(x, y, z));
+    total += error;
+    max = Math.max(max, error);
+  }
+
+  console.log(
+    `base shape: mean |baked - analytic| = ${(total / samples).toFixed(4)}, ` +
+      `max = ${max.toFixed(4)}`,
+  );
 }
 
 /** Cheap hash-based dither, standing in for a blue-noise texture. */
