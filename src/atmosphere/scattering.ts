@@ -25,10 +25,27 @@ import { transmittanceToSun } from './transmittance.js';
 /**
  * Raymarch steps through the atmosphere for a sky sample.
  *
- * Modest because each segment is integrated analytically rather than sampled
- * at a point, which converges far faster than a plain midpoint sum.
+ * Modest because each segment is integrated analytically and the steps are
+ * distributed towards the viewer rather than uniformly — see STEP_DISTRIBUTION.
  */
-export const SCATTERING_SAMPLES = 16;
+export const SCATTERING_SAMPLES = 8;
+
+/**
+ * Exponent shaping where samples land along the ray: 1 is uniform, higher
+ * values bunch them near the viewer.
+ *
+ * Uniform spacing is badly wrong for the view that matters most. Looking
+ * straight up from the ground the ray crosses 70 km, but with a 5.6 km scale
+ * height essentially all the scattering happens in the first fifteen — so
+ * uniform steps put only a couple of samples where the air actually is, and
+ * measured against a 1024-step reference the zenith came out 47% low even at
+ * 16 steps. Squaring the distribution drops that to 13% at half the steps.
+ *
+ * A density-matched (logarithmic) distribution does better still looking
+ * straight up, and much worse everywhere else: for a slanted ray altitude does
+ * not track distance along it, so the samples bunch in the wrong place.
+ */
+const STEP_DISTRIBUTION = 2;
 
 /**
  * Rayleigh phase function.
@@ -75,6 +92,8 @@ export interface ScatteringParams {
   readonly multipleScattering?: (r: number, muSun: number) => Spectrum;
   /** Distance to an opaque surface along the ray, if nearer than the sky. */
   readonly maxDistance?: number;
+  /** Override the step count, for convergence testing. */
+  readonly samples?: number;
 }
 
 /**
@@ -117,7 +136,7 @@ export function integrateScattering(
     return { radiance: [0, 0, 0], transmittance: [1, 1, 1], hitGround: rayHitsGround };
   }
 
-  const step = span / SCATTERING_SAMPLES;
+  const samples = params.samples ?? SCATTERING_SAMPLES;
   const rayleighPhaseValue = rayleighPhase(nu);
   const miePhaseValue = miePhase(nu, model.miePhaseG);
 
@@ -125,8 +144,13 @@ export function integrateScattering(
   // Transmittance from the eye to the current sample, carried along the march.
   const throughput: [number, number, number] = [1, 1, 1];
 
-  for (let i = 0; i < SCATTERING_SAMPLES; i++) {
-    const d = start + step * (i + 0.5);
+  for (let i = 0; i < samples; i++) {
+    // Segment bounds in warped parameter space, so steps grow with distance.
+    const t0 = Math.pow(i / samples, STEP_DISTRIBUTION);
+    const t1 = Math.pow((i + 1) / samples, STEP_DISTRIBUTION);
+
+    const step = span * (t1 - t0);
+    const d = start + span * ((t0 + t1) / 2);
 
     const sampleRadius = radiusAt(r, mu, d);
     const altitude = sampleRadius - model.bottomRadius;

@@ -257,8 +257,51 @@ describe('sky radiance', () => {
 
   it('is blue looking up on a clear day', () => {
     const sky = zenithNoon();
-    expect(sky.radiance[BLUE]).toBeGreaterThan(sky.radiance[RED] * 2);
+
+    // Converged single-scattering gives a blue/red ratio near 1.85. It is not
+    // the full 5.7 of the scattering coefficients because the longer blue path
+    // is also more strongly extinguished, and because multiple scattering —
+    // which would push it higher — is not modelled yet.
+    expect(sky.radiance[BLUE]).toBeGreaterThan(sky.radiance[RED] * 1.7);
     expect(sky.radiance[BLUE]).toBeGreaterThan(0);
+  });
+
+  it('has converged at the default sample count', () => {
+    // Guards the step distribution. Uniform spacing put the zenith 47% below
+    // truth even at twice the samples, because it barely sampled the dense air
+    // near the ground; this fails loudly if that regresses.
+    const coarse = zenithNoon();
+    const fine = integrateScattering(model, lut, {
+      r: GROUND + 2,
+      mu: 1,
+      muSun: 1,
+      nu: 1,
+      samples: 512,
+    });
+
+    for (const channel of [RED, BLUE]) {
+      const error = Math.abs(coarse.radiance[channel]! - fine.radiance[channel]!);
+      expect(error / fine.radiance[channel]!).toBeLessThan(0.15);
+    }
+  });
+
+  it('converges from any viewpoint, not just straight up', () => {
+    const views = [
+      { r: GROUND + 2, mu: 0.707, muSun: 0.866 },
+      { r: GROUND + 2, mu: 0.02, muSun: 0.866 },
+      { r: GROUND + 20_000, mu: 0.5, muSun: 0.6 },
+      { r: GROUND + 400_000, mu: -0.766, muSun: 0.42 },
+    ];
+
+    for (const view of views) {
+      const params = { ...view, nu: view.mu * view.muSun };
+      const coarse = integrateScattering(model, lut, params);
+      const fine = integrateScattering(model, lut, { ...params, samples: 512 });
+
+      const reference = Math.max(1e-9, fine.radiance[BLUE]!);
+      const error = Math.abs(coarse.radiance[BLUE]! - reference) / reference;
+      expect(error, `view mu=${view.mu} r=${view.r}`).toBeLessThan(0.1);
+    }
   });
 
   it('is black above the atmosphere looking away from the planet', () => {
