@@ -205,6 +205,22 @@ export function timeToApoapsis(elements: OrbitSummary, mu: number): number {
   return delta / meanMotion;
 }
 
+/**
+ * Seconds until the vessel next reaches periapsis. Returns Infinity for orbits
+ * that never come back around.
+ */
+export function timeToPeriapsis(elements: OrbitSummary, mu: number): number {
+  if (!elements.isClosed) return Infinity;
+
+  const { semiMajorAxis: a, eccentricity: e } = elements;
+  const meanMotion = Math.sqrt(mu / (a * a * a));
+
+  // Periapsis is true anomaly 0, where mean anomaly is also 0.
+  const delta = normalizeAngle(-meanAnomalyOf(elements.trueAnomaly, e));
+
+  return delta / meanMotion;
+}
+
 /** Mean anomaly corresponding to a true anomaly on an elliptical orbit. */
 export function meanAnomalyOf(trueAnomaly: number, eccentricity: number): number {
   const eccentricAnomaly = eccentricFromTrue(trueAnomaly, eccentricity);

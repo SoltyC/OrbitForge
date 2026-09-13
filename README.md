@@ -4,10 +4,12 @@ A rocket construction and spaceflight simulator with real orbital mechanics, in 
 browser. Think Kerbal Space Program: build a rocket, fly it, and have actual physics
 decide whether you make orbit.
 
-**Status: milestone 1 of 9.** The physics core is working — a hardcoded two-stage
-vehicle launches, performs a gravity turn, stages, and circularises into an 85×77 km
-orbit under RK4 integration. There is no part editor and no fancy rendering yet; both
-are planned and sequenced in [docs/PLAN.md](docs/PLAN.md).
+**Status: milestone 2 of 9.** The physics core works — a hardcoded two-stage vehicle
+launches, performs a gravity turn, stages, and circularises into an 85×77 km orbit under
+RK4. Once coasting it goes *on rails*, propagating analytically: 24 hours and 46
+revolutions warp past in 52 frames with a semi-major axis drift of 10⁻¹⁰ m. There is a
+map view with orbit lines and apsis markers, but no part editor and no fancy rendering
+yet; both are planned and sequenced in [docs/PLAN.md](docs/PLAN.md).
 
 ## Why the physics comes first
 
@@ -37,6 +39,7 @@ automatically.
 | Wheel | Zoom |
 | Space | Pause |
 | `,` / `.` | Time warp down / up |
+| `M` | Toggle map view |
 | `R` | Reset to launchpad |
 
 ## How it works
@@ -45,10 +48,15 @@ automatically.
 current sphere-of-influence owner. This is what KSP does, it keeps orbits analytically
 solvable, and it is what makes arbitrary time-warp possible.
 
-**Two integration regimes.** RK4 for powered and atmospheric flight, where thrust and
-drag change fast; analytic Kepler propagation for coasting, so fast-forwarding an orbit
-does not mean integrating millions of steps. Plain explicit Euler is deliberately absent
-— it drifts orbits into garbage.
+**Two integration regimes, chosen per step.** RK4 for powered and atmospheric flight,
+where thrust and drag change fast; analytic Kepler propagation ("rails") for coasting in
+vacuum. Plain explicit Euler is deliberately absent — it drifts orbits into garbage.
+
+Rails are not just faster, they are *more* accurate: the orbit's shape is carried
+forward exactly rather than re-derived, so `a`, `e` and `i` cannot drift at all. A
+100,000x warp costs exactly as much as 1x, because both are one Kepler solve. Warp is
+clamped at the next periapsis whenever the orbit dips into atmosphere, so a decaying
+orbit can never tunnel through reentry.
 
 **f64 simulation, f32 rendering.** All state is double precision (free in JavaScript).
 A floating origin recentres the rendered world on the active vessel every frame, so GPU
@@ -96,7 +104,7 @@ takes minutes, not hours, and the numbers stay small enough to avoid float pain.
 ## Roadmap
 
 1. ✅ **Physics vertical slice** — RK4, gravity, atmosphere, staging, ascent to orbit
-2. Orbital regime — patched conics, Kepler propagation, time warp, map view
+2. ✅ **Orbital regime** — on-rails Kepler propagation, time warp, orbit lines, map view
 3. Part editor (VAB) — attachment tree, symmetry, staging, live Δv/TWR
 4. SOI transitions — a moon, transfer orbits, encounters
 5. Atmospheric scattering — Bruneton multi-scattering LUTs

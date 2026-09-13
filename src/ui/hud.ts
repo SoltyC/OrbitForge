@@ -13,11 +13,14 @@ import {
   verticalSpeed,
 } from '../sim/forces.js';
 import type { AscentPhase } from '../sim/guidance.js';
-import { elementsFromState } from '../sim/orbit.js';
+import { elementsFromState, timeToApoapsis, timeToPeriapsis } from '../sim/orbit.js';
+import { formatWarp } from '../sim/timeWarp.js';
 import { thrustToWeight, totalDeltaV, vesselMass } from '../sim/vessel.js';
 
 const FIELDS = [
   'phase',
+  'regime',
+  'warp',
   'met',
   'altitude',
   'surfaceSpeed',
@@ -26,6 +29,9 @@ const FIELDS = [
   'apoapsis',
   'periapsis',
   'eccentricity',
+  'period',
+  'timeToApoapsis',
+  'timeToPeriapsis',
   'stage',
   'propellant',
   'deltaV',
@@ -37,6 +43,8 @@ type FieldName = (typeof FIELDS)[number];
 
 const LABELS: Record<FieldName, string> = {
   phase: 'Phase',
+  regime: 'Regime',
+  warp: 'Time warp',
   met: 'MET',
   altitude: 'Altitude',
   surfaceSpeed: 'Surface speed',
@@ -45,6 +53,9 @@ const LABELS: Record<FieldName, string> = {
   apoapsis: 'Apoapsis',
   periapsis: 'Periapsis',
   eccentricity: 'Eccentricity',
+  period: 'Period',
+  timeToApoapsis: 'To apoapsis',
+  timeToPeriapsis: 'To periapsis',
   stage: 'Stage',
   propellant: 'Propellant',
   deltaV: 'Delta-v remaining',
@@ -79,7 +90,7 @@ export class Hud {
     container.append(panel);
   }
 
-  update(state: FlightState, phase: AscentPhase): void {
+  update(state: FlightState, phase: AscentPhase, warpIndex: number): void {
     const body = state.body;
     const altitude = altitudeOf(body, state.position);
     const elements = elementsFromState(state.position, state.velocity, body.mu);
@@ -89,6 +100,8 @@ export class Hud {
     const stage = state.vessel.stages[0];
 
     this.set('phase', formatPhase(phase));
+    this.set('regime', formatRegime(state.regime));
+    this.set('warp', formatWarp(warpIndex));
     this.set('met', formatDuration(state.time));
     this.set('altitude', formatDistance(altitude));
     this.set('surfaceSpeed', `${airspeed.toFixed(0)} m/s`);
@@ -97,6 +110,9 @@ export class Hud {
     this.set('apoapsis', formatApsis(elements.apoapsis, body.radius));
     this.set('periapsis', formatApsis(elements.periapsis, body.radius));
     this.set('eccentricity', elements.eccentricity.toFixed(4));
+    this.set('period', formatDuration(elements.period, false));
+    this.set('timeToApoapsis', formatDuration(timeToApoapsis(elements, body.mu), false));
+    this.set('timeToPeriapsis', formatDuration(timeToPeriapsis(elements, body.mu), false));
     this.set('stage', `${state.vessel.stages.length} remaining`);
     this.set('propellant', stage ? `${stage.propellant.toFixed(0)} kg` : '—');
     this.set('deltaV', `${totalDeltaV(state.vessel, ambient).toFixed(0)} m/s`);
@@ -122,11 +138,30 @@ function formatPhase(phase: AscentPhase): string {
   return names[phase];
 }
 
-function formatDuration(seconds: number): string {
+function formatRegime(regime: FlightState['regime']): string {
+  const names: Record<FlightState['regime'], string> = {
+    prelaunch: 'Pre-launch',
+    powered: 'Powered (RK4)',
+    coasting: 'Coasting (RK4)',
+    onRails: 'On rails (Kepler)',
+    landed: 'Landed',
+  };
+  return names[regime];
+}
+
+function formatDuration(seconds: number, isElapsed = true): string {
+  if (!Number.isFinite(seconds)) return '—';
+
   const total = Math.floor(seconds);
-  const minutes = Math.floor(total / 60);
-  const remainder = total % 60;
-  return `T+${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  const clock =
+    hours > 0 ? `${hours}:${pad(minutes)}:${pad(secs)}` : `${pad(minutes)}:${pad(secs)}`;
+
+  return isElapsed ? `T+${clock}` : clock;
 }
 
 function formatDistance(metres: number): string {

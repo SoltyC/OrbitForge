@@ -189,8 +189,8 @@ Physics is deterministic → test it hard (targets your 80% floor where it matte
 
 | # | Milestone | Proves | Visual bar |
 |---|---|---|---|
-| **1** | **Physics vertical slice** — hardcoded 2-stage rocket, RK4, one planet + gravity + atmosphere. Launch → gravity turn → orbit. | The integrator and force model are correct. | Textured sphere + skybox. Ugly on purpose. |
-| **2** | **Orbital regime** — patched conics, Kepler propagation, time-warp, orbit-line rendering, map view. | Stable orbits, warp without drift. | Orbit lines, planet from space. |
+| **1** | ✅ **Physics vertical slice** — hardcoded 2-stage rocket, RK4, one planet + gravity + atmosphere. Launch → gravity turn → orbit. | The integrator and force model are correct. | Textured sphere + skybox. Ugly on purpose. |
+| **2** | ✅ **Orbital regime** — on-rails Kepler propagation, two-tier time-warp, orbit-line rendering, map view. | Stable orbits, warp without drift. | Orbit lines, planet from space. |
 | **3** | **Part editor (VAB)** — attachment tree, symmetry, staging, resource flow, live Δv/TWR. | Players can build arbitrary rockets. | Functional editor UI. |
 | **4** | **SOI transitions** — Moon added, transfer orbits, encounters, landing on airless body. | Multi-body navigation works. | Second body, rock scatter. |
 | **5** | **Atmosphere & sky** — Bruneton scattering, aerial perspective, sunsets, orbital limb. | The sky sells the planet. | First "wow." |

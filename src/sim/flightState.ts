@@ -4,11 +4,16 @@
  */
 import type { Body } from '../bodies/types.js';
 import { Quat } from './quat.js';
+import type { RailsState } from './rails.js';
 import { Vec3 } from './vec3.js';
 import type { Vessel } from './vessel.js';
 
-/** Which physics regime the vessel is currently integrated under. */
-export type FlightRegime = 'prelaunch' | 'powered' | 'coasting' | 'landed';
+/**
+ * Which physics regime the vessel is currently integrated under.
+ * `onRails` means the trajectory is being advanced analytically rather than
+ * integrated — see sim/rails.ts.
+ */
+export type FlightRegime = 'prelaunch' | 'powered' | 'coasting' | 'onRails' | 'landed';
 
 export interface FlightState {
   /** Mission elapsed time (s). */
@@ -23,10 +28,24 @@ export interface FlightState {
   readonly throttle: number;
   readonly regime: FlightRegime;
   readonly body: Body;
+  /**
+   * Frozen orbital elements while coasting on rails, or null while under
+   * integration. Kept separate from position/velocity so the orbit's shape is
+   * carried forward exactly instead of being re-derived each step.
+   */
+  readonly rails: RailsState | null;
 }
 
 /** Local vessel axis that thrust acts along, before rotation. */
 const LOCAL_THRUST_AXIS = new Vec3(0, 1, 0);
+
+/**
+ * Orientation that points the nose exactly along `direction`. Used on rails,
+ * where the timestep is far too large to integrate an attitude controller.
+ */
+export function orientationPointing(direction: Vec3): Quat {
+  return Quat.fromUnitVectors(LOCAL_THRUST_AXIS, direction.normalized());
+}
 
 /** Unit vector the vessel's nose (and thrust) currently points along. */
 export function thrustAxis(state: FlightState): Vec3 {
@@ -86,5 +105,6 @@ export function createPrelaunchState(
     throttle: 0,
     regime: 'prelaunch',
     body,
+    rails: null,
   };
 }
