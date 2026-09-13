@@ -14,6 +14,7 @@ import {
   DirectionalLight,
   PerspectiveCamera,
   Scene,
+  Vector3,
   WebGPURenderer,
 } from 'three/webgpu';
 
@@ -23,6 +24,12 @@ const FAR_PLANE = 1e9;
 
 /** Sunlight distance; only the direction matters for a directional light. */
 const SUN_DISTANCE = 1e8;
+
+/**
+ * Direction from the system towards the sun, shared by the directional light
+ * and the atmosphere shader so the lit side and the sky always agree.
+ */
+export const SUN_DIRECTION = new Vector3(1, 0.35, 0.2).normalize();
 
 export interface RenderContext {
   readonly renderer: WebGPURenderer;
@@ -57,7 +64,7 @@ export async function createRenderContext(
   );
 
   const sun = new DirectionalLight(0xfff4e6, 3.0);
-  sun.position.set(SUN_DISTANCE, SUN_DISTANCE * 0.35, SUN_DISTANCE * 0.2);
+  sun.position.copy(SUN_DIRECTION).multiplyScalar(SUN_DISTANCE);
   scene.add(sun);
 
   // A little fill so the night side is not pure black.

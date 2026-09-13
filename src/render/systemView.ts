@@ -20,6 +20,7 @@ import type { Body } from '../bodies/types.js';
 import { stateFromElements } from '../sim/orbit.js';
 import type { Vec3 } from '../sim/vec3.js';
 import { createPlanetView, updatePlanetRotation } from './planet.js';
+import { SUN_DIRECTION } from './renderer.js';
 import type { PlanetView } from './planet.js';
 
 /** Segments in a body's orbit line. */
@@ -68,6 +69,15 @@ export class SystemView {
 
       entry.view.group.position.set(relative.x, relative.y, relative.z);
       updatePlanetRotation(entry.view, entry.body, time);
+
+      // The sky shader works in the planet's own frame, so it needs to know
+      // where that planet ended up in render space this frame.
+      entry.view.sky?.setPlanetCentre(relative.x, relative.y, relative.z);
+      entry.view.sky?.setSunDirection(
+        SUN_DIRECTION.x,
+        SUN_DIRECTION.y,
+        SUN_DIRECTION.z,
+      );
 
       // A body's orbit is drawn centred on its parent, not on itself.
       if (entry.orbitLine && entry.parent) {

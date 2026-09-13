@@ -4,13 +4,18 @@ A rocket construction and spaceflight simulator with real orbital mechanics, in 
 browser. Think Kerbal Space Program: build a rocket, fly it, and have actual physics
 decide whether you make orbit.
 
-**Status: milestone 4 of 9.** The simulation now flies a complete multi-body mission.
+**Status: milestone 5 of 9.** The simulation flies a complete multi-body mission.
 Build a rocket in the VAB, launch it, reach orbit, wait for a transfer window, burn for
 the moon, cross into its sphere of influence, and land — all under patched-conic gravity
 with analytic time-warp. Coasting vessels go *on rails*, propagating in closed form: 24
 hours and 46 revolutions warp past in 52 frames with a semi-major axis drift of 10⁻¹⁰ m.
-The rendering is still placeholder geometry; scattering, clouds, terrain and vegetation
-are milestones 5 through 8, sequenced in [docs/PLAN.md](docs/PLAN.md).
+The sky is now physically based — Rayleigh, Mie and ozone, with a precomputed
+transmittance table — so it is blue overhead, white toward the horizon, orange at sunset,
+and a thin lit rim seen from orbit. The ground is still placeholder geometry; clouds,
+terrain and vegetation are milestones 6 through 8, sequenced in
+[docs/PLAN.md](docs/PLAN.md).
+
+![The atmosphere model: noon, sunset, and the limb from 400 km](docs/sky-reference.png)
 
 The reference launcher, Pathfinder I, deliberately *cannot* reach the moon — it gets an
 encounter but crashes at 1.2 km/s. Landing takes a bigger craft, which is what the editor
@@ -99,7 +104,23 @@ stacking boxes and are numerically wrong for orbits and multi-scale distances. T
 model is hand-written. A contact solver will be used later, but only for construction
 collision and crash debris.
 
-### The equations
+### The sky
+
+One model produces the blue overhead, the whitening toward the horizon, the orange
+sunset and the lit rim from orbit — they are not four special cases. Blue scatters about
+5.7x more strongly than red purely from the 1/λ⁴ dependence in the Rayleigh coefficients,
+and a sunset is red because the grazing path is long enough to extinguish nearly all the
+blue before it arrives.
+
+Transmittance — the fraction of light surviving a path — depends only on altitude and
+zenith angle, so it precomputes into a small table once per body and is sampled from then
+on. The GPU shader is a deliberate transcription of the CPU implementation in
+`src/atmosphere/`, which is unit-tested against physical facts. That matters because a
+wrong sky still looks like a sky: the tests, not the eye, are what says it is right.
+`npx vite-node tools/renderSkyReference.ts` renders the model to a PNG, which is the
+ground truth the game is supposed to match.
+
+## The equations
 
 | | |
 |---|---|
@@ -109,6 +130,9 @@ collision and crash debris.
 | Drag | `F_d = ½ ρ v² C_d A` |
 | Orbit shape | Vis-viva + eccentricity vector → Keplerian elements |
 | Propagation | Newton solve of `M = E - e·sin(E)` |
+| Transmittance | `T = exp(-∫ σ dt)`, with `σ` from Rayleigh + Mie + ozone |
+| Rayleigh phase | `(3/16π)(1 + cos²θ)` |
+| Mie phase | Henyey-Greenstein, `g = 0.8` |
 
 ## Layout
 
@@ -116,15 +140,17 @@ collision and crash debris.
 src/
   sim/      # integrators, orbits, rails, forces, attitude, guidance — no Three.js
   parts/    # catalogue, craft tree, assembler — plain data, no Three.js
+  atmosphere/ # scattering model, transmittance LUT — no Three.js
   bodies/   # celestial body definitions and ephemeris
   editor/   # the VAB: craft view, panels, click-to-place
   render/   # WebGPU renderer, floating origin, planet/vessel/stars/orbit lines
   ui/       # telemetry HUD
 tests/      # deterministic simulation tests
+tools/      # offline renderers, e.g. the sky reference image
 docs/PLAN.md
 ```
 
-`sim/` and `parts/` import nothing from Three.js. That is a deliberate constraint: it is
+`sim/`, `parts/` and `atmosphere/` import nothing from Three.js. That is a deliberate constraint: it is
 what makes the physics unit-testable without a renderer, and it is worth preserving.
 
 ## The world
@@ -145,7 +171,7 @@ there is nothing to slow a descent but the engine, so landing is flown on thrust
 2. ✅ **Orbital regime** — on-rails Kepler propagation, time warp, orbit lines, map view
 3. ✅ **Part editor (VAB)** — attachment tree, radial symmetry, derived staging, live Δv/TWR
 4. ✅ **SOI transitions** — Lunara, Hohmann transfers, encounters, powered landing
-5. Atmospheric scattering — Bruneton multi-scattering LUTs
+5. ✅ **Atmospheric scattering** — Rayleigh/Mie/ozone with a precomputed transmittance LUT
 6. Volumetric clouds — raymarched, weather-mapped, temporally reprojected
 7. Planetary terrain — cube-sphere quadtree LOD, GPU noise heightfields
 8. Vegetation and surface detail — instanced scatter with impostor LODs

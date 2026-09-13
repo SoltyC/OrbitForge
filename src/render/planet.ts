@@ -1,20 +1,15 @@
 /**
- * Placeholder planet rendering: a shaded sphere plus a translucent shell
- * marking the top of the atmosphere.
+ * Planet rendering: a shaded sphere for the ground, plus a physically based
+ * atmosphere shell for bodies that have air.
  *
- * This is intentionally simple. Real quadtree terrain arrives in milestone 7
- * and atmospheric scattering in milestone 5; until then the sphere exists only
- * to give the flight a visible frame of reference.
+ * The surface is still placeholder geometry — real quadtree terrain arrives in
+ * milestone 7 — but the sky around it is the real scattering model.
  */
-import {
-  BackSide,
-  Mesh,
-  MeshBasicMaterial,
-  MeshStandardMaterial,
-  SphereGeometry,
-  Group,
-} from 'three/webgpu';
+import { Mesh, MeshStandardMaterial, SphereGeometry, Group } from 'three/webgpu';
+import { createAtmosphereModel } from '../atmosphere/model.js';
 import type { Body } from '../bodies/types.js';
+import { createSkyView } from './atmosphere/skyMaterial.js';
+import type { SkyView } from './atmosphere/skyMaterial.js';
 
 /** Latitude/longitude segments on the placeholder sphere. */
 const SPHERE_SEGMENTS = 128;
@@ -22,6 +17,8 @@ const SPHERE_SEGMENTS = 128;
 export interface PlanetView {
   readonly group: Group;
   readonly surface: Mesh;
+  /** Present only for bodies with an atmosphere. */
+  readonly sky: SkyView | null;
 }
 
 export function createPlanetView(body: Body): PlanetView {
@@ -49,35 +46,11 @@ export function createPlanetView(body: Body): PlanetView {
   surface.name = 'surface';
   spinFrame.add(surface);
 
-  if (body.atmosphere) {
-    group.add(createAtmosphereShell(body));
-  }
+  const model = createAtmosphereModel(body);
+  const sky = model ? createSkyView(model) : null;
+  if (sky) group.add(sky.mesh);
 
-  return { group, surface };
-}
-
-/**
- * A thin inside-out shell at the atmosphere boundary. Viewed from outside it
- * reads as a haze halo; from inside it does not occlude the vessel.
- */
-function createAtmosphereShell(body: Body): Mesh {
-  const atmosphere = body.atmosphere!;
-  const shell = new Mesh(
-    new SphereGeometry(
-      body.radius + atmosphere.height,
-      SPHERE_SEGMENTS / 2,
-      SPHERE_SEGMENTS / 4,
-    ),
-    new MeshBasicMaterial({
-      color: 0x4a90d9,
-      transparent: true,
-      opacity: 0.12,
-      side: BackSide,
-      depthWrite: false,
-    }),
-  );
-  shell.name = 'atmosphere';
-  return shell;
+  return { group, surface, sky };
 }
 
 /**

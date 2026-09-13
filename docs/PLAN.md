@@ -193,7 +193,7 @@ Physics is deterministic → test it hard (targets your 80% floor where it matte
 | **2** | ✅ **Orbital regime** — on-rails Kepler propagation, two-tier time-warp, orbit-line rendering, map view. | Stable orbits, warp without drift. | Orbit lines, planet from space. |
 | **3** | ✅ **Part editor (VAB)** — attachment tree, radial symmetry, derived staging, live Δv/TWR. | Players can build arbitrary rockets. | Functional editor UI. |
 | **4** | ✅ **SOI transitions** — Lunara added, Hohmann transfers, encounters, powered landing. | Multi-body navigation works. | Second body, rock scatter. |
-| **5** | **Atmosphere & sky** — Bruneton scattering, aerial perspective, sunsets, orbital limb. | The sky sells the planet. | First "wow." |
+| **5** | ✅ **Atmosphere & sky** — Rayleigh/Mie/ozone scattering, transmittance LUT, sunsets, orbital limb. | The sky sells the planet. | First "wow." |
 | **6** | **Volumetric clouds** — raymarched layer, weather map, fly-through, perf pass. | Clouds affordable + beautiful during ascent/reentry. | Big visual jump. |
 | **7** | **Terrain LOD** — cube-sphere quadtree, noise heightfields, triplanar materials. | Real surfaces to land on, no popping. | Non-low-poly ground. |
 | **8** | **Vegetation & surface detail** — instanced scatter, LOD/impostors, wind, ground detail. | Homeworld surface looks alive. | Target visual quality reached. |
