@@ -1,0 +1,94 @@
+:root {
+  --hud-bg: rgba(8, 14, 22, 0.72);
+  --hud-border: rgba(120, 180, 235, 0.28);
+  --hud-label: #7f95ad;
+  --hud-value: #dce8f5;
+  --hud-accent: #59b0ff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  color: var(--hud-value);
+}
+
+#viewport {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  touch-action: none;
+}
+
+#overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.hud-panel {
+  background: var(--hud-bg);
+  border: 1px solid var(--hud-border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  min-width: 280px;
+  backdrop-filter: blur(6px);
+  font-size: 12px;
+  line-height: 1.7;
+  order: 1;
+}
+
+.hud-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.hud-label {
+  color: var(--hud-label);
+}
+
+.hud-value {
+  color: var(--hud-value);
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-help {
+  order: 2;
+  background: var(--hud-bg);
+  border: 1px solid var(--hud-border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 11px;
+  color: var(--hud-label);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hud-help strong {
+  color: var(--hud-accent);
+  letter-spacing: 0.08em;
+}
+
+.fatal {
+  margin: auto;
+  padding: 16px 20px;
+  border: 1px solid #ff6b6b;
+  border-radius: 8px;
+  background: rgba(40, 8, 8, 0.9);
+  color: #ffd5d5;
+  font-size: 13px;
+}
