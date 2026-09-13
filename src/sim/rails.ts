@@ -11,6 +11,7 @@
  * carried forward exactly, so a/e/i cannot drift at all.
  */
 import { densityAt } from './atmosphere.js';
+import { childrenOf } from '../bodies/system.js';
 import type { Body } from '../bodies/types.js';
 import type { FlightState } from './flightState.js';
 import {
@@ -20,6 +21,8 @@ import {
   timeToPeriapsis,
 } from './orbit.js';
 import type { OrbitalElements } from './orbit.js';
+import { distanceToNearestBoundary } from './soi.js';
+import type { FrameState } from './soi.js';
 import type { Vec3 } from './vec3.js';
 
 export interface RailsState {
@@ -81,35 +84,95 @@ function isInDrag(body: Body, position: Vec3): boolean {
 
 /**
  * The largest timestep that can safely be taken on rails without skipping past
- * atmospheric entry.
+ * something that must be simulated: atmospheric entry, or a sphere-of-influence
+ * boundary.
  *
- * Without this, a high warp factor would tunnel a vessel straight through the
- * atmosphere — it would be above it before the step and below it after, and
- * the reentry would simply never be simulated.
+ * Without this, a high warp factor would tunnel a vessel straight through — it
+ * would be outside before the step and inside after, and the transition would
+ * simply never happen.
  */
 export function maxSafeRailsTimestep(
   rails: RailsState,
+  body: Body,
+  requestedDt: number,
+  time = 0,
+): number {
+  const { position, velocity } = railsToCartesian(rails, body.mu);
+  const summary = elementsFromState(position, velocity, body.mu);
+
+  return Math.min(
+    atmosphereLimit(summary, body, requestedDt),
+    boundaryLimit({ body, position, velocity }, summary, time, requestedDt),
+  );
+}
+
+function atmosphereLimit(
+  summary: ReturnType<typeof elementsFromState>,
   body: Body,
   requestedDt: number,
 ): number {
   const atmosphere = body.atmosphere;
   if (!atmosphere) return requestedDt;
 
-  const summary = elementsFromState(
-    ...toStatePair(rails, body.mu),
-    body.mu,
-  );
-
   // An orbit that never dips into the atmosphere can warp freely.
   const entryRadius = body.radius + atmosphere.height;
   if (summary.periapsis > entryRadius) return requestedDt;
 
   // Otherwise never warp past the next periapsis pass.
-  const secondsToPeriapsis = timeToPeriapsis(summary, body.mu);
-  return Math.min(requestedDt, Math.max(0, secondsToPeriapsis));
+  return Math.min(requestedDt, Math.max(0, timeToPeriapsis(summary, body.mu)));
 }
 
-function toStatePair(rails: RailsState, mu: number): [Vec3, Vec3] {
-  const state = railsToCartesian(rails, mu);
-  return [state.position, state.velocity];
+/**
+ * Limit the step so the vessel cannot leap across an SOI boundary.
+ *
+ * Screened by geometry first: an orbit whose apoapsis falls short of every
+ * boundary simply cannot reach one, so it warps at full speed. Only when a
+ * crossing is actually reachable does this fall back to the conservative
+ * clearance-over-speed bound, which assumes the worst case of heading straight
+ * at the nearest boundary.
+ */
+function boundaryLimit(
+  state: FrameState,
+  summary: ReturnType<typeof elementsFromState>,
+  time: number,
+  requestedDt: number,
+): number {
+  if (!canReachBoundary(state.body, summary)) return requestedDt;
+
+  const clearance = distanceToNearestBoundary(state, time);
+  if (!Number.isFinite(clearance)) return requestedDt;
+
+  const speed = state.velocity.length;
+  if (speed <= 0) return requestedDt;
+
+  // Half the clearance keeps the endpoint on this side of the boundary even
+  // as the boundary itself moves with its body.
+  return Math.min(requestedDt, Math.max(0, (clearance * 0.5) / speed));
+}
+
+/**
+ * Could this orbit ever reach a sphere-of-influence boundary?
+ *
+ * Two ways: climb out past the current body's own SOI, or cross the orbital
+ * band swept by one of its moons.
+ */
+function canReachBoundary(
+  body: Body,
+  summary: ReturnType<typeof elementsFromState>,
+): boolean {
+  // An unbound or SOI-exceeding orbit is on its way out.
+  if (!summary.isClosed) return true;
+  if (summary.apoapsis >= body.soiRadius) return true;
+
+  for (const child of childrenOf(body.id)) {
+    if (!child.orbit) continue;
+
+    const inner = child.orbit.semiMajorAxis - child.soiRadius;
+    const outer = child.orbit.semiMajorAxis + child.soiRadius;
+
+    // Ranges overlap only if the vessel's radius band meets the moon's.
+    if (summary.apoapsis >= inner && summary.periapsis <= outer) return true;
+  }
+
+  return false;
 }

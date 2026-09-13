@@ -10,6 +10,8 @@ import { altitudeOf, surfaceRelativeVelocity, verticalSpeed } from './forces.js'
 import type { FlightState } from './flightState.js';
 import { directionFromPitch, horizontalPrograde } from './flightState.js';
 import { elementsFromState } from './orbit.js';
+import { planTransfer } from './transfer.js';
+import type { Body } from '../bodies/types.js';
 import { hasPropellant, thrustToWeight } from './vessel.js';
 import type { Vec3 } from './vec3.js';
 
@@ -49,7 +51,13 @@ export type AscentPhase =
   | 'liftoff'
   | 'gravityTurn'
   | 'insertion'
-  | 'complete';
+  | 'complete'
+  | 'transferWait'
+  | 'transferBurn'
+  | 'cruise'
+  | 'arrived'
+  | 'descent'
+  | 'touchdown';
 
 export interface GuidanceCommand {
   readonly phase: AscentPhase;
@@ -57,12 +65,44 @@ export interface GuidanceCommand {
   readonly throttle: number;
   /** True when the active stage is spent and should be jettisoned. */
   readonly shouldStage: boolean;
+  /**
+   * Upper bound on the next timestep (s), when the autopilot is waiting for a
+   * moment it must not overshoot. Without this a high warp factor would sail
+   * straight past a transfer window between one frame and the next.
+   */
+  readonly maxTimestep?: number;
 }
 
 export interface AscentTarget {
   /** Desired final orbital radius from the body centre (m). */
   readonly orbitRadius: number;
 }
+
+/** Burn when the phase error is within this of the ideal window (rad). */
+const TRANSFER_WINDOW_TOLERANCE = 0.004;
+/**
+ * Apoapsis-to-periapsis ratio above which a departure burn is judged to be
+ * already under way. A parking orbit sits near 1.01; anything meaningfully
+ * above that has been stretched by a burn in progress.
+ */
+const BURN_UNDERWAY_RATIO = 1.1;
+/**
+ * Descent profile: how fast to fall per metre of altitude (1/s). Falling
+ * proportionally to height is a simple, always-stable approach — the closer
+ * the ground, the slower the vehicle is asked to be.
+ */
+const DESCENT_RATE_PER_METRE = 0.08;
+/** Bounds on the commanded descent speed (m/s). */
+const MAX_DESCENT_SPEED = 350;
+const TOUCHDOWN_SPEED = 3;
+/** Throttle gain on the speed error (per m/s). */
+const DESCENT_THROTTLE_GAIN = 0.12;
+/** Altitude below which the vehicle is considered to have landed (m). */
+const TOUCHDOWN_ALTITUDE = 20;
+/** Stop the departure burn once apoapsis reaches this fraction of the target. */
+const TRANSFER_APOAPSIS_TOLERANCE = 0.998;
+/** Leave this much of the approach unwarped so the window is not skipped. */
+const WINDOW_APPROACH_FRACTION = 0.5;
 
 /**
  * Decide what the autopilot wants this tick. Pure: depends only on the
@@ -72,6 +112,7 @@ export function computeGuidance(
   state: FlightState,
   target: AscentTarget,
   autopilotEnabled: boolean,
+  transferTo: Body | null = null,
 ): GuidanceCommand {
   const altitude = altitudeOf(state.body, state.position);
   const elements = elementsFromState(state.position, state.velocity, state.body.mu);
@@ -89,12 +130,19 @@ export function computeGuidance(
   // Orbit achieved: periapsis is clear of the atmosphere and near target.
   const periapsisTarget = target.orbitRadius * PERIAPSIS_TOLERANCE;
   if (elements.isClosed && elements.periapsis >= periapsisTarget) {
+    if (transferTo) return transferCommand(state, transferTo, shouldStage);
+
     return {
       phase: 'complete',
       targetDirection: horizontalPrograde(state.position, state.velocity),
       throttle: 0,
       shouldStage: false,
     };
+  }
+
+  // Already under way to the target: nothing more to steer until arrival.
+  if (transferTo && isOnTransfer(state, transferTo, elements)) {
+    return transferCommand(state, transferTo, shouldStage);
   }
 
   // Climb until apoapsis reaches the target altitude.
@@ -104,6 +152,116 @@ export function computeGuidance(
 
   // Apoapsis is high enough: now build orbital velocity.
   return insertionCommand(state, altitude, target, shouldStage);
+}
+
+/**
+ * True once the vessel is either inside the target's SOI or on an orbit that
+ * already reaches it — in both cases the ascent controller must keep its hands
+ * off, or it would try to "fix" the transfer ellipse back into a parking orbit.
+ */
+function isOnTransfer(
+  state: FlightState,
+  target: Body,
+  elements: ReturnType<typeof elementsFromState>,
+): boolean {
+  if (state.body.id === target.id) return true;
+  if (!target.orbit) return false;
+
+  return elements.apoapsis >= target.orbit.semiMajorAxis * TRANSFER_APOAPSIS_TOLERANCE;
+}
+
+/**
+ * Transfer to a moon: wait for the window, burn prograde to raise apoapsis to
+ * the moon's orbit, then coast until its gravity takes over.
+ */
+function transferCommand(
+  state: FlightState,
+  target: Body,
+  shouldStage: boolean,
+): GuidanceCommand {
+  const prograde = horizontalPrograde(state.position, state.velocity);
+
+  // Arrived: the moon owns the vessel now, so fly it down.
+  if (state.body.id === target.id) {
+    return descentCommand(state, shouldStage);
+  }
+
+  const elements = elementsFromState(state.position, state.velocity, state.body.mu);
+  const plan = planTransfer(state.position, target, state.body.mu, state.time);
+
+  // Apoapsis already reaches the moon's orbit — stop burning and coast out.
+  if (elements.apoapsis >= plan.arrivalRadius * TRANSFER_APOAPSIS_TOLERANCE) {
+    return { phase: 'cruise', targetDirection: prograde, throttle: 0, shouldStage };
+  }
+
+  // Once committed, keep burning to completion.
+  //
+  // Guidance is stateless — it re-derives everything each tick — so without
+  // this the vessel would leave the window a moment after entering it, stop
+  // mid-burn, and wait a whole orbit for the next one. That actually happened:
+  // the transfer completed in a dozen ragged bursts over six days instead of
+  // one burn, wasting most of the propellant. The stretch of the orbit itself
+  // is the evidence that a burn is in progress.
+  const isBurnUnderway = elements.apoapsis > elements.periapsis * BURN_UNDERWAY_RATIO;
+
+  if (isBurnUnderway || Math.abs(plan.phaseError) <= TRANSFER_WINDOW_TOLERANCE) {
+    return {
+      phase: 'transferBurn',
+      targetDirection: prograde,
+      throttle: 1,
+      shouldStage,
+    };
+  }
+
+  // Hold, and stop time-warp from leaping over the window.
+  return {
+    phase: 'transferWait',
+    targetDirection: prograde,
+    throttle: 0,
+    shouldStage,
+    maxTimestep: Math.max(
+      PHYSICS_STEP_FLOOR,
+      plan.timeToWindow * WINDOW_APPROACH_FRACTION,
+    ),
+  };
+}
+
+/** Smallest cap the guidance will ever ask for (s). */
+const PHYSICS_STEP_FLOOR = 0.02;
+
+/**
+ * Powered descent onto an airless body.
+ *
+ * With no atmosphere there is nothing to slow the vehicle but its own engine,
+ * so the controller points retrograde to the *surface* velocity — which bleeds
+ * off horizontal and vertical speed together — and throttles to track a target
+ * speed that tapers with altitude.
+ */
+function descentCommand(state: FlightState, shouldStage: boolean): GuidanceCommand {
+  const altitude = altitudeOf(state.body, state.position);
+  const surfaceVelocity = surfaceRelativeVelocity(
+    state.body,
+    state.position,
+    state.velocity,
+  );
+  const speed = surfaceVelocity.length;
+  const up = state.position.normalized();
+
+  if (altitude <= TOUCHDOWN_ALTITUDE && speed <= TOUCHDOWN_SPEED) {
+    return { phase: 'touchdown', targetDirection: up, throttle: 0, shouldStage: false };
+  }
+
+  const targetSpeed = Math.min(
+    MAX_DESCENT_SPEED,
+    Math.max(TOUCHDOWN_SPEED, altitude * DESCENT_RATE_PER_METRE),
+  );
+
+  const throttle = clamp((speed - targetSpeed) * DESCENT_THROTTLE_GAIN, 0, 1);
+
+  // Retrograde until nearly stopped, then hold upright for touchdown.
+  const direction = speed > TOUCHDOWN_SPEED ? surfaceVelocity.normalized().negate() : up;
+
+  return { phase: 'descent', targetDirection: direction, throttle, shouldStage };
 }
 
 function ascentCommand(

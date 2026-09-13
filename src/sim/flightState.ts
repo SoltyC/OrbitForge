@@ -52,11 +52,6 @@ export function thrustAxis(state: FlightState): Vec3 {
   return state.orientation.rotate(LOCAL_THRUST_AXIS);
 }
 
-/** Radially outward unit vector ("up") at the vessel's position. */
-export function upDirection(state: FlightState): Vec3 {
-  return state.position.normalized();
-}
-
 /**
  * Local east unit vector — the direction of the body's rotation. Launching
  * east banks the surface rotation as free orbital velocity.

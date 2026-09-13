@@ -3,23 +3,32 @@
  * than fidelity (see docs/PLAN.md §9). Constants are Kerbin-scaled: small
  * enough that orbits are reachable in minutes, large enough that real orbital
  * mechanics still govern everything.
- *
- * Milestone 1 ships only the homeworld. Moons and outer planets arrive with
- * the SOI work in milestone 4.
  */
 import type { Body } from './types.js';
+import { sphereOfInfluence } from './types.js';
+
+/** Lunara's orbital radius around Terrin (m). */
+const LUNARA_ORBIT_RADIUS = 12_000_000;
+
+const TERRIN_MU = 3.5316e12;
+const LUNARA_MU = 6.5138398e10;
 
 /**
  * Terrin — the homeworld. 600 km radius, 9.81 m/s^2 at sea level, 70 km of
  * atmosphere. Circular orbit just above the atmosphere needs ~2296 m/s.
+ *
+ * It is the root of the system, so its sphere of influence is unbounded: there
+ * is nothing further out to hand a vessel off to.
  */
 export const TERRIN: Body = {
   id: 'terrin',
   name: 'Terrin',
-  mu: 3.5316e12,
+  mu: TERRIN_MU,
   radius: 600_000,
   rotationPeriod: 21_600,
-  soiRadius: 84_159_286,
+  soiRadius: Infinity,
+  parentId: null,
+  orbit: null,
   atmosphere: {
     height: 70_000,
     scaleHeight: 5_600,
@@ -32,10 +41,54 @@ export const TERRIN: Body = {
   },
 };
 
-export const BODIES: readonly Body[] = [TERRIN];
+/**
+ * Lunara — Terrin's airless moon, on a circular equatorial orbit. Landing here
+ * is the milestone 4 objective: no atmosphere means no drag and no parachutes,
+ * so the descent has to be flown on the engine alone.
+ */
+export const LUNARA: Body = {
+  id: 'lunara',
+  name: 'Lunara',
+  mu: LUNARA_MU,
+  radius: 200_000,
+  rotationPeriod: 138_984,
+  soiRadius: sphereOfInfluence(LUNARA_ORBIT_RADIUS, LUNARA_MU, TERRIN_MU),
+  parentId: 'terrin',
+  orbit: {
+    semiMajorAxis: LUNARA_ORBIT_RADIUS,
+    eccentricity: 0,
+    inclination: 0,
+    longitudeOfAscendingNode: 0,
+    argumentOfPeriapsis: 0,
+    trueAnomaly: 0,
+  },
+  atmosphere: null,
+  surface: {
+    seed: 77010203,
+    color: 0x8a8578,
+  },
+};
+
+export const BODIES: readonly Body[] = [TERRIN, LUNARA];
 
 export function findBody(id: string): Body {
   const body = BODIES.find((b) => b.id === id);
   if (!body) throw new Error(`Unknown celestial body: ${id}`);
   return body;
+}
+
+/** The body at the root of the system — everything else orbits it. */
+export function rootBody(): Body {
+  const root = BODIES.find((b) => b.parentId === null);
+  if (!root) throw new Error('System has no root body');
+  return root;
+}
+
+/** Bodies directly orbiting the given one. */
+export function childrenOf(bodyId: string): readonly Body[] {
+  return BODIES.filter((b) => b.parentId === bodyId);
+}
+
+export function parentOf(body: Body): Body | null {
+  return body.parentId ? findBody(body.parentId) : null;
 }

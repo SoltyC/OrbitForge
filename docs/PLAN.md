@@ -192,7 +192,7 @@ Physics is deterministic → test it hard (targets your 80% floor where it matte
 | **1** | ✅ **Physics vertical slice** — hardcoded 2-stage rocket, RK4, one planet + gravity + atmosphere. Launch → gravity turn → orbit. | The integrator and force model are correct. | Textured sphere + skybox. Ugly on purpose. |
 | **2** | ✅ **Orbital regime** — on-rails Kepler propagation, two-tier time-warp, orbit-line rendering, map view. | Stable orbits, warp without drift. | Orbit lines, planet from space. |
 | **3** | ✅ **Part editor (VAB)** — attachment tree, radial symmetry, derived staging, live Δv/TWR. | Players can build arbitrary rockets. | Functional editor UI. |
-| **4** | **SOI transitions** — Moon added, transfer orbits, encounters, landing on airless body. | Multi-body navigation works. | Second body, rock scatter. |
+| **4** | ✅ **SOI transitions** — Lunara added, Hohmann transfers, encounters, powered landing. | Multi-body navigation works. | Second body, rock scatter. |
 | **5** | **Atmosphere & sky** — Bruneton scattering, aerial perspective, sunsets, orbital limb. | The sky sells the planet. | First "wow." |
 | **6** | **Volumetric clouds** — raymarched layer, weather map, fly-through, perf pass. | Clouds affordable + beautiful during ascent/reentry. | Big visual jump. |
 | **7** | **Terrain LOD** — cube-sphere quadtree, noise heightfields, triplanar materials. | Real surfaces to land on, no popping. | Non-low-poly ground. |

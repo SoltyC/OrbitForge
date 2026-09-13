@@ -4,13 +4,17 @@ A rocket construction and spaceflight simulator with real orbital mechanics, in 
 browser. Think Kerbal Space Program: build a rocket, fly it, and have actual physics
 decide whether you make orbit.
 
-**Status: milestone 3 of 9.** There is a working part editor: build a rocket from an
-attachment tree with radial symmetry, watch delta-v and TWR update as you go, and launch
-it. The autopilot flies whatever you built to orbit. Once coasting it goes *on rails*,
-propagating analytically — 24 hours and 46 revolutions warp past in 52 frames with a
-semi-major axis drift of 10⁻¹⁰ m — with a map view showing orbit lines and apsis markers.
+**Status: milestone 4 of 9.** The simulation now flies a complete multi-body mission.
+Build a rocket in the VAB, launch it, reach orbit, wait for a transfer window, burn for
+the moon, cross into its sphere of influence, and land — all under patched-conic gravity
+with analytic time-warp. Coasting vessels go *on rails*, propagating in closed form: 24
+hours and 46 revolutions warp past in 52 frames with a semi-major axis drift of 10⁻¹⁰ m.
 The rendering is still placeholder geometry; scattering, clouds, terrain and vegetation
 are milestones 5 through 8, sequenced in [docs/PLAN.md](docs/PLAN.md).
+
+The reference launcher, Pathfinder I, deliberately *cannot* reach the moon — it gets an
+encounter but crashes at 1.2 km/s. Landing takes a bigger craft, which is what the editor
+is for.
 
 ## Why the physics comes first
 
@@ -54,6 +58,16 @@ The game opens in the VAB. Pick a part, click a blue attach node to place it, th
 **Single-body gravity (patched conics).** A vessel only ever feels the gravity of its
 current sphere-of-influence owner. This is what KSP does, it keeps orbits analytically
 solvable, and it is what makes arbitrary time-warp possible.
+
+Crossing a boundary rewrites the vessel's position and velocity into the new body's
+frame. That rewrite has to be *exactly* continuous — the same physical trajectory
+described from a different origin — because any error there is a free velocity change at
+every crossing. It is checked both in isolation and mid-flight during a real mission.
+
+Warp is clamped whenever a boundary or atmospheric entry is reachable, so nothing is ever
+skipped: a vessel cannot be outside a sphere of influence before a step and inside it
+after, with the transition never simulated. Orbits that geometrically cannot reach a
+boundary skip the check entirely and warp at full speed.
 
 **Two integration regimes, chosen per step.** RK4 for powered and atmospheric flight,
 where thrust and drag change fast; analytic Kepler propagation ("rails") for coasting in
@@ -102,7 +116,7 @@ collision and crash debris.
 src/
   sim/      # integrators, orbits, rails, forces, attitude, guidance — no Three.js
   parts/    # catalogue, craft tree, assembler — plain data, no Three.js
-  bodies/   # celestial body definitions
+  bodies/   # celestial body definitions and ephemeris
   editor/   # the VAB: craft view, panels, click-to-place
   render/   # WebGPU renderer, floating origin, planet/vessel/stars/orbit lines
   ui/       # telemetry HUD
@@ -115,17 +129,22 @@ what makes the physics unit-testable without a renderer, and it is worth preserv
 
 ## The world
 
-Terrin, the homeworld, uses Kerbin-tuned constants rather than real-solar-system values:
-600 km radius, 9.81 m/s² at sea level, 70 km of atmosphere, and a sidereal day of six
-hours. Circular orbit just above the atmosphere costs about 2,296 m/s. Reaching orbit
+**Terrin**, the homeworld, uses Kerbin-tuned constants rather than real-solar-system
+values: 600 km radius, 9.81 m/s² at sea level, 70 km of atmosphere, and a sidereal day of
+six hours. Circular orbit just above the atmosphere costs about 2,296 m/s. Reaching orbit
 takes minutes, not hours, and the numbers stay small enough to avoid float pain.
+
+**Lunara**, its airless moon, orbits 12,000 km out with a 2,430 km sphere of influence.
+The transfer window comes round when Lunara leads the vessel by about 111°, the departure
+burn costs roughly 850 m/s, and the crossing takes about seven hours. With no atmosphere
+there is nothing to slow a descent but the engine, so landing is flown on thrust alone.
 
 ## Roadmap
 
 1. ✅ **Physics vertical slice** — RK4, gravity, atmosphere, staging, ascent to orbit
 2. ✅ **Orbital regime** — on-rails Kepler propagation, time warp, orbit lines, map view
 3. ✅ **Part editor (VAB)** — attachment tree, radial symmetry, derived staging, live Δv/TWR
-4. SOI transitions — a moon, transfer orbits, encounters
+4. ✅ **SOI transitions** — Lunara, Hohmann transfers, encounters, powered landing
 5. Atmospheric scattering — Bruneton multi-scattering LUTs
 6. Volumetric clouds — raymarched, weather-mapped, temporally reprojected
 7. Planetary terrain — cube-sphere quadtree LOD, GPU noise heightfields

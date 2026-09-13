@@ -5,7 +5,7 @@
  * integrating, and in single analytic jumps while on rails — so the trajectory
  * is identical regardless of framerate or warp factor.
  */
-import { TERRIN } from './bodies/system.js';
+import { LUNARA, TERRIN } from './bodies/system.js';
 import { Editor } from './editor/editor.js';
 import { craftToVessel } from './parts/assembly.js';
 import type { Craft } from './parts/craft.js';
@@ -20,7 +20,7 @@ import {
   updateOrbitGeometry,
   updateVesselMarker,
 } from './render/orbitLine.js';
-import { createPlanetView, updatePlanetRotation } from './render/planet.js';
+import { SystemView } from './render/systemView.js';
 import { attachResizeHandler, createRenderContext } from './render/renderer.js';
 import { createStarfield } from './render/starfield.js';
 import { createVesselView, updateVesselView } from './render/vesselView.js';
@@ -37,7 +37,6 @@ import {
   requiresRails,
   warpFactorAt,
 } from './sim/timeWarp.js';
-import { Vec3 } from './sim/vec3.js';
 import { Hud } from './ui/hud.js';
 
 /** Target a circular orbit 80 km up — comfortably clear of the atmosphere. */
@@ -66,6 +65,7 @@ async function main(): Promise<void> {
   const options: SimulationOptions = {
     target: { orbitRadius: TERRIN.radius + TARGET_ALTITUDE },
     autopilotEnabled: true,
+    transferTo: LUNARA,
   };
 
   let craft: Craft = createPathfinderCraft();
@@ -79,12 +79,12 @@ async function main(): Promise<void> {
   let lastOrbitSignature = '';
 
   const origin = new FloatingOrigin(state.position);
-  const planet = createPlanetView(TERRIN);
+  const system = new SystemView();
   let vessel = createVesselView(state.vessel);
   const stars = createStarfield(TERRIN.surface.seed);
   const orbit = createOrbitLineView();
 
-  context.scene.add(planet.group, vessel.group, stars, orbit.group);
+  context.scene.add(system.group, vessel.group, stars, orbit.group);
 
   const chase = new ChaseCamera(context.camera);
   const map = new MapCamera(context.camera);
@@ -142,6 +142,7 @@ async function main(): Promise<void> {
     // The vessel mesh is sub-metre against a 600 km planet; in map view the
     // marker stands in for it.
     vessel.group.visible = mode === 'flight';
+    system.setOrbitLinesVisible(mode === 'map');
   };
 
   const detachKeys = attachKeyboard({
@@ -201,33 +202,42 @@ async function main(): Promise<void> {
     // vessel then sits at the scene origin and the body centre lands at minus
     // its simulation position.
     origin.setOrigin(current.position);
-    origin.writeTo(Vec3.ZERO, planet.group.position);
-    orbit.group.position.copy(planet.group.position);
 
-    updatePlanetRotation(planet, TERRIN, current.time);
+    // Bodies are placed through the shared root frame, so this stays correct
+    // when the vessel is handed from a planet to a moon mid-flight.
+    system.update(current.body, current.position, current.time);
+
+    // The vessel's own orbit is drawn around whichever body currently owns it.
+    const hostCentre = system.positionOf(current.body.id);
+    if (hostCentre) orbit.group.position.copy(hostCentre);
+
     updateVesselView(vessel, current.orientation, current.throttle);
 
-    const elements = elementsFromState(current.position, current.velocity, TERRIN.mu);
+    const elements = elementsFromState(
+      current.position,
+      current.velocity,
+      current.body.mu,
+    );
 
     // Rebuilding 256 ellipse vertices is only worth doing when the orbit
     // actually changed, which it does not while coasting.
-    const signature = orbitSignature(elements);
+    const signature = `${current.body.id}|${orbitSignature(elements)}`;
     if (signature !== lastOrbitSignature) {
-      updateOrbitGeometry(orbit, elements, TERRIN.mu);
+      updateOrbitGeometry(orbit, elements, current.body.mu);
       lastOrbitSignature = signature;
     }
-    updateVesselMarker(orbit, elements, TERRIN.mu);
+    updateVesselMarker(orbit, elements, current.body.mu);
 
     if (viewMode === 'flight') {
-      const altitude = Math.max(0, altitudeOf(TERRIN, current.position));
+      const altitude = Math.max(0, altitudeOf(current.body, current.position));
       chase.setDistance(60 + altitude * 0.01);
       chase.update(current.position);
       updateMarkerScale(orbit, chase.getDistance());
     } else {
       const frameRadius = Number.isFinite(elements.apoapsis)
-        ? Math.max(elements.apoapsis, TERRIN.radius)
+        ? Math.max(elements.apoapsis, current.body.radius)
         : current.position.length;
-      map.update(planet.group.position, frameRadius);
+      map.update(hostCentre ?? context.camera.position, frameRadius);
       updateMarkerScale(orbit, map.getDistance());
     }
 

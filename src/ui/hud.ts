@@ -19,6 +19,7 @@ import { thrustToWeight, totalDeltaV, vesselMass } from '../sim/vessel.js';
 
 const FIELDS = [
   'phase',
+  'body',
   'regime',
   'warp',
   'met',
@@ -43,6 +44,7 @@ type FieldName = (typeof FIELDS)[number];
 
 const LABELS: Record<FieldName, string> = {
   phase: 'Phase',
+  body: 'Reference body',
   regime: 'Regime',
   warp: 'Time warp',
   met: 'MET',
@@ -106,6 +108,7 @@ export class Hud {
     const stage = state.vessel.stages[0];
 
     this.set('phase', formatPhase(phase));
+    this.set('body', body.name);
     this.set('regime', formatRegime(state.regime));
     this.set('warp', formatWarp(warpIndex));
     this.set('met', formatDuration(state.time));
@@ -138,6 +141,12 @@ function formatPhase(phase: AscentPhase): string {
     liftoff: 'Liftoff',
     gravityTurn: 'Gravity turn',
     insertion: 'Orbit insertion',
+    transferWait: 'Awaiting window',
+    transferBurn: 'Transfer burn',
+    cruise: 'Cruising',
+    arrived: 'Arrived',
+    descent: 'Powered descent',
+    touchdown: 'Touchdown',
     complete: 'Orbit achieved',
   };
   return names[phase];

@@ -1,6 +1,7 @@
 /**
  * Celestial body definitions. All values SI: metres, kilograms, seconds.
  */
+import type { OrbitalElements } from '../sim/orbit.js';
 
 export interface AtmosphereDef {
   /** Altitude above sea level where the atmosphere ends (m). */
@@ -31,8 +32,26 @@ export interface Body {
   readonly rotationPeriod: number;
   /** Sphere-of-influence radius (m). Infinite for the root body. */
   readonly soiRadius: number;
+  /** Body this one orbits, or null for the root of the system. */
+  readonly parentId: string | null;
+  /** Orbit around the parent at epoch (t = 0). Null for the root body. */
+  readonly orbit: OrbitalElements | null;
   readonly atmosphere: AtmosphereDef | null;
   readonly surface: SurfaceDef;
+}
+
+/**
+ * Radius of a body's sphere of influence (m).
+ *
+ * r = a * (m_body / m_parent)^(2/5). Inside it, the patched-conic model treats
+ * this body as the only source of gravity; outside, the parent takes over.
+ */
+export function sphereOfInfluence(
+  semiMajorAxis: number,
+  mu: number,
+  parentMu: number,
+): number {
+  return semiMajorAxis * Math.pow(mu / parentMu, 2 / 5);
 }
 
 /** Surface gravity magnitude at sea level (m/s^2). */

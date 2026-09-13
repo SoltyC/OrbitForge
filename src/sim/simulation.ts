@@ -28,6 +28,8 @@ import {
   maxSafeRailsTimestep,
   railsToCartesian,
 } from './rails.js';
+import { resolveSoi } from './soi.js';
+import type { Body } from '../bodies/types.js';
 import type { TranslationalState } from './integrator.js';
 import { Vec3 } from './vec3.js';
 import {
@@ -46,6 +48,8 @@ export const PHYSICS_TIMESTEP = 1 / 50;
 export interface SimulationOptions {
   readonly target: AscentTarget;
   readonly autopilotEnabled: boolean;
+  /** When set, the autopilot transfers to this body after reaching orbit. */
+  readonly transferTo?: Body | null;
 }
 
 export interface StepResult {
@@ -67,20 +71,57 @@ export function step(
   options: SimulationOptions,
   dt: number = PHYSICS_TIMESTEP,
 ): StepResult {
-  const command = computeGuidance(state, options.target, options.autopilotEnabled);
+  const command = computeGuidance(
+    state,
+    options.target,
+    options.autopilotEnabled,
+    options.transferTo ?? null,
+  );
 
   // Drop a spent stage before computing this step's forces.
   const staged = command.shouldStage
     ? { ...state, vessel: jettisonStage(state.vessel) }
     : state;
 
+  // The autopilot may cap the step when it is waiting for a precise moment.
+  const cappedDt = Math.min(dt, command.maxTimestep ?? Infinity);
+
   const wantsThrust = resolveThrottle(staged, command.throttle) > 0;
   if (!wantsThrust && canGoOnRails(staged)) {
-    const railed = stepOnRails(staged, command, dt);
-    if (railed) return railed;
+    const railed = stepOnRails(staged, command, cappedDt);
+    if (railed) return applySoi(railed);
   }
 
-  return stepIntegrated(staged, command, Math.min(dt, PHYSICS_TIMESTEP));
+  return applySoi(stepIntegrated(staged, command, Math.min(cappedDt, PHYSICS_TIMESTEP)));
+}
+
+/**
+ * Hand the vessel to whichever body now dominates it.
+ *
+ * Crossing a boundary rewrites position and velocity into the new frame and
+ * invalidates any frozen orbit, because those elements described a conic about
+ * the body just left.
+ */
+function applySoi(result: StepResult): StepResult {
+  const state = result.state;
+  const resolved = resolveSoi(
+    { body: state.body, position: state.position, velocity: state.velocity },
+    state.time,
+  );
+
+  if (resolved.body.id === state.body.id) return result;
+
+  return {
+    ...result,
+    state: {
+      ...state,
+      body: resolved.body,
+      position: resolved.position,
+      velocity: resolved.velocity,
+      rails: null,
+      regime: state.throttle > 0 ? 'powered' : 'coasting',
+    },
+  };
 }
 
 /**
@@ -95,7 +136,7 @@ function stepOnRails(
 ): StepResult | null {
   const mu = state.body.mu;
   const rails = state.rails ?? enterRails(state);
-  const safeDt = maxSafeRailsTimestep(rails, state.body, dt);
+  const safeDt = maxSafeRailsTimestep(rails, state.body, dt, state.time);
 
   // Too close to the atmosphere to warp across — hand back to the integrator.
   if (safeDt < PHYSICS_TIMESTEP) return null;
