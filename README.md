@@ -4,12 +4,13 @@ A rocket construction and spaceflight simulator with real orbital mechanics, in 
 browser. Think Kerbal Space Program: build a rocket, fly it, and have actual physics
 decide whether you make orbit.
 
-**Status: milestone 2 of 9.** The physics core works — a hardcoded two-stage vehicle
-launches, performs a gravity turn, stages, and circularises into an 85×77 km orbit under
-RK4. Once coasting it goes *on rails*, propagating analytically: 24 hours and 46
-revolutions warp past in 52 frames with a semi-major axis drift of 10⁻¹⁰ m. There is a
-map view with orbit lines and apsis markers, but no part editor and no fancy rendering
-yet; both are planned and sequenced in [docs/PLAN.md](docs/PLAN.md).
+**Status: milestone 3 of 9.** There is a working part editor: build a rocket from an
+attachment tree with radial symmetry, watch delta-v and TWR update as you go, and launch
+it. The autopilot flies whatever you built to orbit. Once coasting it goes *on rails*,
+propagating analytically — 24 hours and 46 revolutions warp past in 52 frames with a
+semi-major axis drift of 10⁻¹⁰ m — with a map view showing orbit lines and apsis markers.
+The rendering is still placeholder geometry; scattering, clouds, terrain and vegetation
+are milestones 5 through 8, sequenced in [docs/PLAN.md](docs/PLAN.md).
 
 ## Why the physics comes first
 
@@ -33,13 +34,19 @@ automatically.
 
 ### Controls
 
+The game opens in the VAB. Pick a part, click a blue attach node to place it, then
+**Launch**.
+
 | Input | Action |
 |---|---|
-| Drag | Orbit camera |
-| Wheel | Zoom |
+| Click part → click node | Place a part |
+| Click a placed part | Select it |
+| Delete / Backspace | Remove the selected part and everything below it |
+| Drag / Wheel | Orbit / zoom camera |
 | Space | Pause |
 | `,` / `.` | Time warp down / up |
 | `M` | Toggle map view |
+| `B` | Back to the VAB |
 | `R` | Reset to launchpad |
 
 ## How it works
@@ -62,6 +69,17 @@ orbit can never tunnel through reentry.
 A floating origin recentres the rendered world on the active vessel every frame, so GPU
 coordinates stay small and precise instead of jittering at planetary scale.
 
+**Staging is derived, not declared.** A craft is an attachment tree; a decoupler is a
+stage boundary. Counting decouplers along the path from the root gives every part its
+stage automatically, so the staging list cannot drift out of sync with the rocket.
+
+**The autopilot adapts to the craft, not the other way round.** It flies a real gravity
+turn — kick off vertical, then follow the surface velocity vector — and throttles to hold
+a TWR ceiling. An early scripted altitude-to-pitch table worked beautifully for one
+reference rocket and flung a booster-heavy build to a 554 km apoapsis; a fixed schedule
+silently encodes one vehicle's acceleration curve. Following prograde does not, because
+the velocity vector already reflects whatever the player actually built.
+
 **No game physics engine for flight.** Rapier/PhysX-style contact solvers are built for
 stacking boxes and are numerically wrong for orbits and multi-scale distances. The flight
 model is hand-written. A contact solver will be used later, but only for construction
@@ -82,10 +100,11 @@ collision and crash debris.
 
 ```
 src/
-  sim/      # integrators, orbits, forces, attitude, guidance — zero Three.js imports
-  parts/    # part catalogue and the test vehicle, all plain data
+  sim/      # integrators, orbits, rails, forces, attitude, guidance — no Three.js
+  parts/    # catalogue, craft tree, assembler — plain data, no Three.js
   bodies/   # celestial body definitions
-  render/   # WebGPU renderer, floating origin, placeholder planet/vessel/stars
+  editor/   # the VAB: craft view, panels, click-to-place
+  render/   # WebGPU renderer, floating origin, planet/vessel/stars/orbit lines
   ui/       # telemetry HUD
 tests/      # deterministic simulation tests
 docs/PLAN.md
@@ -105,7 +124,7 @@ takes minutes, not hours, and the numbers stay small enough to avoid float pain.
 
 1. ✅ **Physics vertical slice** — RK4, gravity, atmosphere, staging, ascent to orbit
 2. ✅ **Orbital regime** — on-rails Kepler propagation, time warp, orbit lines, map view
-3. Part editor (VAB) — attachment tree, symmetry, staging, live Δv/TWR
+3. ✅ **Part editor (VAB)** — attachment tree, radial symmetry, derived staging, live Δv/TWR
 4. SOI transitions — a moon, transfer orbits, encounters
 5. Atmospheric scattering — Bruneton multi-scattering LUTs
 6. Volumetric clouds — raymarched, weather-mapped, temporally reprojected

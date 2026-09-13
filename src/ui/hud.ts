@@ -65,10 +65,12 @@ const LABELS: Record<FieldName, string> = {
 
 export class Hud {
   private readonly values = new Map<FieldName, HTMLElement>();
+  private readonly panel: HTMLElement;
 
   constructor(container: HTMLElement) {
     const panel = document.createElement('div');
     panel.className = 'hud-panel';
+    this.panel = panel;
 
     for (const field of FIELDS) {
       const row = document.createElement('div');
@@ -88,6 +90,10 @@ export class Hud {
     }
 
     container.append(panel);
+  }
+
+  setVisible(visible: boolean): void {
+    this.panel.style.display = visible ? '' : 'none';
   }
 
   update(state: FlightState, phase: AscentPhase, warpIndex: number): void {
@@ -131,8 +137,7 @@ function formatPhase(phase: AscentPhase): string {
     prelaunch: 'Pre-launch',
     liftoff: 'Liftoff',
     gravityTurn: 'Gravity turn',
-    coastToApoapsis: 'Coasting',
-    circularise: 'Circularising',
+    insertion: 'Orbit insertion',
     complete: 'Orbit achieved',
   };
   return names[phase];

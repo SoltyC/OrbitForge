@@ -19,8 +19,8 @@ describe('Pathfinder I mass properties', () => {
   const vessel = createPathfinder();
 
   it('has the expected liftoff mass', () => {
-    // 11 550 kg booster + 2 650 kg upper + 800 kg pod.
-    expect(vesselMass(vessel)).toBe(15_000);
+    // 11 550 kg booster + 2 700 kg upper + 800 kg pod.
+    expect(vesselMass(vessel)).toBe(15_050);
   });
 
   it('starts with a launch TWR above 1', () => {
@@ -43,8 +43,8 @@ describe('stageDeltaV', () => {
   it('matches the Tsiolkovsky rocket equation by hand', () => {
     const vessel = createPathfinder();
 
-    // Upper stage: 2 650 kg wet + 800 kg pod above it, 2 000 kg of propellant.
-    const wet = 2_650 + 800;
+    // Upper stage: 2 700 kg wet + 800 kg pod above it, 2 000 kg of propellant.
+    const wet = 2_700 + 800;
     const dry = wet - 2_000;
     const expected = 345 * G0 * Math.log(wet / dry);
 
@@ -96,7 +96,7 @@ describe('jettisonStage', () => {
     const staged = jettisonStage(vessel);
 
     expect(staged.stages.length).toBe(2);
-    expect(vesselMass(staged)).toBe(3_450);
+    expect(vesselMass(staged)).toBe(3_500);
     expect(activeEngine(staged)?.thrustVacuum).toBe(60_000);
   });
 

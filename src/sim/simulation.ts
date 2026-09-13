@@ -29,14 +29,14 @@ import {
   railsToCartesian,
 } from './rails.js';
 import type { TranslationalState } from './integrator.js';
-import { thrustAt } from '../parts/types.js';
 import { Vec3 } from './vec3.js';
 import {
-  activeEngine,
+  activeEngines,
   consumePropellant,
   currentMassFlow,
   dragArea,
   jettisonStage,
+  totalThrust,
   vesselMass,
 } from './vessel.js';
 
@@ -160,8 +160,7 @@ function stepIntegrated(
 
 /** Throttle is zero without a live engine or propellant, whatever was asked. */
 function resolveThrottle(state: FlightState, requested: number): number {
-  const engine = activeEngine(state.vessel);
-  if (!engine) return 0;
+  if (activeEngines(state.vessel).length === 0) return 0;
   const stage = state.vessel.stages[0];
   if (!stage || stage.propellant <= 0) return 0;
   return Math.min(1, Math.max(0, requested));
@@ -212,14 +211,14 @@ function resolveThrust(
   consumed: number,
   dt: number,
 ): number {
-  const engine = activeEngine(state.vessel);
-  if (!engine || throttle <= 0) return 0;
+  if (throttle <= 0) return 0;
 
   const demanded = currentMassFlow(state.vessel, ambientRatio, throttle) * dt;
   if (demanded <= 0) return 0;
 
+  // A partially-fed cluster produces a proportional fraction of its thrust.
   const fraction = Math.min(1, consumed / demanded);
-  return thrustAt(engine, ambientRatio) * throttle * fraction;
+  return totalThrust(state.vessel, ambientRatio, throttle) * fraction;
 }
 
 function integrateTranslation(

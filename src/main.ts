@@ -6,7 +6,10 @@
  * is identical regardless of framerate or warp factor.
  */
 import { TERRIN } from './bodies/system.js';
-import { createPathfinder } from './parts/testVehicle.js';
+import { Editor } from './editor/editor.js';
+import { craftToVessel } from './parts/assembly.js';
+import type { Craft } from './parts/craft.js';
+import { createPathfinderCraft } from './parts/testVehicle.js';
 import { ChaseCamera } from './render/chaseCamera.js';
 import { FloatingOrigin } from './render/floatingOrigin.js';
 import { MapCamera } from './render/mapCamera.js';
@@ -44,6 +47,7 @@ const TARGET_ALTITUDE = 80_000;
 const MAX_STEPS_PER_FRAME = 16;
 
 type ViewMode = 'flight' | 'map';
+type AppMode = 'editor' | 'flight';
 
 async function main(): Promise<void> {
   const canvas = document.querySelector<HTMLCanvasElement>('#viewport');
@@ -51,6 +55,10 @@ async function main(): Promise<void> {
   if (!canvas || !overlay) {
     throw new Error('Missing #viewport canvas or #overlay container');
   }
+
+  // Bound to non-nullable locals so the hoisted mode switcher below can close
+  // over them without losing the narrowing.
+  const viewport: HTMLCanvasElement = canvas;
 
   const context = await createRenderContext(canvas);
   const detachResize = attachResizeHandler(context);
@@ -60,8 +68,10 @@ async function main(): Promise<void> {
     autopilotEnabled: true,
   };
 
-  let state = createPrelaunchState(TERRIN, createPathfinder());
+  let craft: Craft = createPathfinderCraft();
+  let state = createPrelaunchState(TERRIN, craftToVessel(craft));
   let phase: AscentPhase = 'prelaunch';
+  let appMode: AppMode = 'editor';
   let requestedWarp = 0;
   let activeWarp = 0;
   let isPaused = false;
@@ -70,7 +80,7 @@ async function main(): Promise<void> {
 
   const origin = new FloatingOrigin(state.position);
   const planet = createPlanetView(TERRIN);
-  const vessel = createVesselView(state.vessel);
+  let vessel = createVesselView(state.vessel);
   const stars = createStarfield(TERRIN.surface.seed);
   const orbit = createOrbitLineView();
 
@@ -78,9 +88,51 @@ async function main(): Promise<void> {
 
   const chase = new ChaseCamera(context.camera);
   const map = new MapCamera(context.camera);
-  let detachCamera = chase.attach(canvas);
+  let detachCamera = (): void => {};
 
   const hud = new Hud(overlay);
+
+  /** Rebuild flight state from a craft and swap in its mesh. */
+  const loadCraft = (next: Craft): void => {
+    craft = next;
+    state = createPrelaunchState(TERRIN, craftToVessel(craft));
+    phase = 'prelaunch';
+    requestedWarp = 0;
+    activeWarp = 0;
+    lastOrbitSignature = '';
+
+    context.scene.remove(vessel.group);
+    vessel = createVesselView(state.vessel);
+    vessel.group.visible = viewMode === 'flight';
+    context.scene.add(vessel.group);
+  };
+
+  const editor = new Editor(overlay, TERRIN, {
+    onLaunch: (built) => {
+      loadCraft(built);
+      setAppMode('flight');
+    },
+  });
+  let detachEditor = editor.attach(canvas);
+  editor.setVisible(true);
+  hud.setVisible(false);
+
+  function setAppMode(mode: AppMode): void {
+    if (mode === appMode) return;
+    appMode = mode;
+
+    hud.setVisible(mode === 'flight');
+    editor.setVisible(mode === 'editor');
+
+    // Only one mode may own the pointer at a time.
+    if (mode === 'editor') {
+      detachCamera();
+      detachEditor = editor.attach(viewport);
+    } else {
+      detachEditor();
+      detachCamera = viewMode === 'flight' ? chase.attach(viewport) : map.attach(viewport);
+    }
+  }
 
   const setViewMode = (mode: ViewMode): void => {
     if (mode === viewMode) return;
@@ -106,10 +158,10 @@ async function main(): Promise<void> {
       setViewMode(viewMode === 'flight' ? 'map' : 'flight');
     },
     onReset: () => {
-      state = createPrelaunchState(TERRIN, createPathfinder());
-      phase = 'prelaunch';
-      requestedWarp = 0;
-      lastOrbitSignature = '';
+      loadCraft(craft);
+    },
+    onToggleEditor: () => {
+      setAppMode(appMode === 'editor' ? 'flight' : 'editor');
     },
   });
 
@@ -190,6 +242,13 @@ async function main(): Promise<void> {
     const elapsed = Math.min((now - lastFrameTime) / 1000, 0.25);
     lastFrameTime = now;
 
+    if (appMode === 'editor') {
+      editor.update();
+      context.renderer.render(editor.scene, editor.camera);
+      requestAnimationFrame(frame);
+      return;
+    }
+
     if (!isPaused) advanceSimulation(elapsed);
 
     renderFrame(state);
@@ -201,6 +260,7 @@ async function main(): Promise<void> {
   window.addEventListener('beforeunload', () => {
     detachResize();
     detachCamera();
+    detachEditor();
     detachKeys();
   });
 }
@@ -210,6 +270,7 @@ interface KeyboardHandlers {
   readonly onWarpDown: () => void;
   readonly onWarpUp: () => void;
   readonly onToggleMap: () => void;
+  readonly onToggleEditor: () => void;
   readonly onReset: () => void;
 }
 
@@ -229,6 +290,10 @@ function attachKeyboard(handlers: KeyboardHandlers): () => void {
       case 'm':
       case 'M':
         handlers.onToggleMap();
+        break;
+      case 'b':
+      case 'B':
+        handlers.onToggleEditor();
         break;
       case 'r':
       case 'R':

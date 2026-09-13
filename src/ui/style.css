@@ -92,3 +92,197 @@ body {
   color: #ffd5d5;
   font-size: 13px;
 }
+
+/* ---------------------------------------------------------------- Editor */
+
+.editor-root {
+  position: fixed;
+  inset: 0;
+  padding: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+.editor-panel {
+  background: var(--hud-bg);
+  border: 1px solid var(--hud-border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  backdrop-filter: blur(6px);
+  pointer-events: auto;
+}
+
+.editor-catalogue {
+  width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+
+.editor-right {
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.editor-heading {
+  color: var(--hud-accent);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+
+.editor-part {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--hud-value);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.editor-part:hover {
+  background: rgba(90, 209, 255, 0.12);
+}
+
+.editor-part.is-active {
+  border-color: var(--hud-accent);
+  background: rgba(90, 209, 255, 0.18);
+}
+
+.editor-part-meta {
+  color: var(--hud-label);
+  font-size: 11px;
+}
+
+.editor-symmetry {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hud-border);
+}
+
+.editor-symmetry-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.editor-symmetry-buttons button {
+  flex: 1;
+  padding: 6px 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--hud-value);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.editor-symmetry-buttons button.is-active {
+  border-color: var(--hud-accent);
+  background: rgba(90, 209, 255, 0.2);
+}
+
+.editor-stat,
+.editor-stage {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.editor-stat-label {
+  color: var(--hud-label);
+}
+
+.editor-stat-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.editor-stage {
+  align-items: baseline;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(120, 180, 235, 0.12);
+}
+
+.editor-stage:last-child {
+  border-bottom: none;
+}
+
+.editor-stage-index {
+  color: var(--hud-accent);
+  font-weight: 600;
+  min-width: 16px;
+}
+
+.editor-stage-detail {
+  color: var(--hud-label);
+  flex: 1;
+  font-size: 11px;
+}
+
+.editor-stage-numbers {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+.editor-actions {
+  display: flex;
+  gap: 8px;
+  pointer-events: auto;
+}
+
+.editor-actions button {
+  flex: 1;
+  padding: 10px 0;
+  border-radius: 8px;
+  border: 1px solid var(--hud-border);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.editor-clear {
+  background: rgba(8, 14, 22, 0.72);
+  color: var(--hud-label);
+}
+
+.editor-launch {
+  background: rgba(90, 209, 255, 0.22);
+  border-color: var(--hud-accent);
+  color: #eaf7ff;
+  font-weight: 600;
+}
+
+.editor-launch:hover {
+  background: rgba(90, 209, 255, 0.34);
+}
+
+.editor-message {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: var(--hud-bg);
+  border: 1px solid var(--hud-border);
+  color: var(--hud-label);
+  font-size: 12px;
+  pointer-events: none;
+}

@@ -44,10 +44,55 @@ export function vesselMass(vessel: Vessel): number {
 
 /** The engine of the active (lowest) stage, or null if it has none. */
 export function activeEngine(vessel: Vessel): EngineSpec | null {
-  const stage = vessel.stages[0];
-  if (!stage) return null;
-  const enginePart = stage.parts.find((part) => part.engine);
-  return enginePart?.engine ?? null;
+  return activeEngines(vessel)[0] ?? null;
+}
+
+/**
+ * Every engine in a stage. A stage can hold a cluster — a centre engine plus a
+ * ring of radial boosters — and their thrust and propellant draw all add up.
+ */
+export function stageEngines(vessel: Vessel, stageIndex: number): readonly EngineSpec[] {
+  const stage = vessel.stages[stageIndex];
+  if (!stage) return [];
+  return stage.parts.flatMap((part) => (part.engine ? [part.engine] : []));
+}
+
+/** Every engine in the active (lowest) stage. */
+export function activeEngines(vessel: Vessel): readonly EngineSpec[] {
+  return stageEngines(vessel, 0);
+}
+
+/** Combined thrust of the active stage at a given ambient pressure (N). */
+export function totalThrust(
+  vessel: Vessel,
+  pressureRatio: number,
+  throttle = 1,
+): number {
+  return activeEngines(vessel).reduce(
+    (sum, engine) => sum + thrustAt(engine, pressureRatio) * throttle,
+    0,
+  );
+}
+
+/**
+ * Thrust-weighted specific impulse of an engine cluster (s).
+ *
+ * Engines with different efficiencies do not simply average: the cluster's Isp
+ * is total thrust over total mass flow, which weights each engine by how much
+ * propellant it actually burns.
+ */
+export function effectiveIsp(
+  engines: readonly EngineSpec[],
+  pressureRatio: number,
+): number {
+  const thrust = engines.reduce((sum, e) => sum + thrustAt(e, pressureRatio), 0);
+  if (thrust <= 0) return 0;
+
+  const flowPerG0 = engines.reduce(
+    (sum, e) => sum + thrustAt(e, pressureRatio) / ispAt(e, pressureRatio),
+    0,
+  );
+  return flowPerG0 > 0 ? thrust / flowPerG0 : 0;
 }
 
 /** Reaction-wheel torque authority summed across all remaining parts (N*m). */
@@ -55,6 +100,14 @@ export function torqueAuthority(vessel: Vessel): number {
   return vessel.stages.reduce(
     (sum, stage) =>
       sum + stage.parts.reduce((s, part) => s + (part.command?.torque ?? 0), 0),
+    0,
+  );
+}
+
+/** Widest gimbal deflection available in the active stage (rad). */
+export function maxGimbalRange(vessel: Vessel): number {
+  return activeEngines(vessel).reduce(
+    (max, engine) => Math.max(max, engine.gimbalRange),
     0,
   );
 }
@@ -136,8 +189,8 @@ export function stageDeltaV(
   const stage = vessel.stages[stageIndex];
   if (!stage) return 0;
 
-  const enginePart = stage.parts.find((part) => part.engine);
-  if (!enginePart?.engine || stage.propellant <= 0) return 0;
+  const engines = stageEngines(vessel, stageIndex);
+  if (engines.length === 0 || stage.propellant <= 0) return 0;
 
   const massAbove = vessel.stages
     .slice(stageIndex + 1)
@@ -147,7 +200,7 @@ export function stageDeltaV(
   const dryMass = wetMass - stage.propellant;
   if (dryMass <= 0) return 0;
 
-  return ispAt(enginePart.engine, pressureRatio) * G0 * Math.log(wetMass / dryMass);
+  return effectiveIsp(engines, pressureRatio) * G0 * Math.log(wetMass / dryMass);
 }
 
 /** Total remaining ideal delta-v across all stages (m/s). */
@@ -165,9 +218,10 @@ export function thrustToWeight(
   pressureRatio: number,
   throttle = 1,
 ): number {
-  const engine = activeEngine(vessel);
-  if (!engine || localGravity <= 0) return 0;
-  return (thrustAt(engine, pressureRatio) * throttle) / (vesselMass(vessel) * localGravity);
+  if (localGravity <= 0) return 0;
+  const mass = vesselMass(vessel);
+  if (mass <= 0) return 0;
+  return totalThrust(vessel, pressureRatio, throttle) / (mass * localGravity);
 }
 
 /** Propellant mass flow of the active engine at a throttle setting (kg/s). */
@@ -176,7 +230,8 @@ export function currentMassFlow(
   pressureRatio: number,
   throttle: number,
 ): number {
-  const engine = activeEngine(vessel);
-  if (!engine) return 0;
-  return massFlowRate(engine, pressureRatio) * throttle;
+  return activeEngines(vessel).reduce(
+    (sum, engine) => sum + massFlowRate(engine, pressureRatio) * throttle,
+    0,
+  );
 }

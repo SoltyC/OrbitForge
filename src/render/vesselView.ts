@@ -18,7 +18,8 @@ import {
 import type { Quat } from '../sim/quat.js';
 import type { Vessel } from '../sim/vessel.js';
 
-const PART_COLORS: Record<string, number> = {
+/** Shared with the editor so a part looks the same in the VAB and in flight. */
+export const PART_COLORS: Record<string, number> = {
   command: 0xd8d8dc,
   tank: 0xb8bcc4,
   engine: 0x51555c,

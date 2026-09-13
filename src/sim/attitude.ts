@@ -5,10 +5,14 @@
  * Control authority is deliberately finite — the vessel cannot snap instantly
  * to a new heading, so a badly shaped ascent profile actually costs you.
  */
-import { thrustAt } from '../parts/types.js';
 import { Quat } from './quat.js';
 import { Vec3 } from './vec3.js';
-import { activeEngine, momentOfInertia, torqueAuthority } from './vessel.js';
+import {
+  maxGimbalRange,
+  momentOfInertia,
+  torqueAuthority,
+  totalThrust,
+} from './vessel.js';
 import type { Vessel } from './vessel.js';
 
 /** Proportional gain on pointing error (1/s^2). */
@@ -96,14 +100,15 @@ export function availableTorque(
   pressureRatio: number,
 ): number {
   const wheelTorque = torqueAuthority(vessel);
-  const engine = activeEngine(vessel);
-  if (!engine || throttle <= 0) return wheelTorque;
+  if (throttle <= 0) return wheelTorque;
 
-  // Lever arm from the engine to the centre of mass, approximated as a
+  const thrust = totalThrust(vessel, pressureRatio, throttle);
+  if (thrust <= 0) return wheelTorque;
+
+  // Lever arm from the engines to the centre of mass, approximated as a
   // quarter of the stack length.
   const leverArm = Math.max(1, vesselLengthApprox(vessel) / 4);
-  const gimbalTorque =
-    thrustAt(engine, pressureRatio) * throttle * Math.sin(engine.gimbalRange) * leverArm;
+  const gimbalTorque = thrust * Math.sin(maxGimbalRange(vessel)) * leverArm;
 
   return wheelTorque + gimbalTorque;
 }

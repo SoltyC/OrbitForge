@@ -5,6 +5,24 @@
 
 export type PartCategory = 'command' | 'engine' | 'tank' | 'decoupler';
 
+/**
+ * Where another part can be attached.
+ *
+ * `stack` nodes join end-to-end along the vehicle's long axis; `radial` nodes
+ * hang parts off the side, which is what symmetry groups are built from.
+ *
+ * Positions are relative to the part's own origin, which sits at the centre of
+ * its base — so a part occupies y in [0, length].
+ */
+export type AttachNodeKind = 'stack' | 'radial';
+
+export interface AttachNode {
+  readonly id: string;
+  readonly kind: AttachNodeKind;
+  /** Offset from the part's origin (m). */
+  readonly offset: readonly [number, number, number];
+}
+
 export interface EngineSpec {
   /** Thrust in vacuum (N). */
   readonly thrustVacuum: number;
@@ -41,6 +59,27 @@ export interface Part {
   readonly engine?: EngineSpec;
   readonly tank?: TankSpec;
   readonly command?: CommandSpec;
+  /** Attachment points this part offers to others. */
+  readonly attachNodes: readonly AttachNode[];
+}
+
+/** Standard stack node at the base of a part. */
+export function bottomNode(): AttachNode {
+  return { id: 'bottom', kind: 'stack', offset: [0, 0, 0] };
+}
+
+/** Standard stack node at the top of a part. */
+export function topNode(length: number): AttachNode {
+  return { id: 'top', kind: 'stack', offset: [0, length, 0] };
+}
+
+/** Side-mount node at the midpoint of a part's flank. */
+export function radialNode(diameter: number, length: number): AttachNode {
+  return { id: 'radial', kind: 'radial', offset: [diameter / 2, length / 2, 0] };
+}
+
+export function findAttachNode(part: Part, nodeId: string): AttachNode | undefined {
+  return part.attachNodes.find((node) => node.id === nodeId);
 }
 
 /** Standard gravity used in the rocket equation and Isp conversions (m/s^2). */
