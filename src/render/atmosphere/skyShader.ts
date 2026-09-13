@@ -19,7 +19,7 @@
  * Raymarch steps. Matches SCATTERING_SAMPLES in the reference implementation;
  * WGSL needs the bound as a literal.
  */
-export const SHADER_SAMPLES = 32;
+export const SHADER_SAMPLES = 16;
 
 /** Henyey-Greenstein phase function. */
 export const MIE_PHASE_WGSL = /* wgsl */ `
@@ -89,46 +89,6 @@ fn sampleTransmittance(
 `;
 
 /**
- * Transmittance over a segment, as the ratio of the two to-top values: the
- * shared outer part of the path cancels exactly.
- *
- * The order of the ratio matters. Inverting it yields values above 1 that
- * clamp to 1, silently removing all attenuation — which is precisely the bug
- * the reference implementation's tests caught.
- */
-export const SEGMENT_TRANSMITTANCE_WGSL = /* wgsl */ `
-fn segmentTransmittance(
-  lut: texture_2d<f32>,
-  r: f32,
-  mu: f32,
-  d: f32,
-  bottomRadius: f32,
-  topRadius: f32,
-  groundHit: f32,
-  lutSize: vec2<f32>
-) -> vec3<f32> {
-  let endRadius = clamp(
-    sqrt( max( 0.0, d * d + 2.0 * r * mu * d + r * r ) ), bottomRadius, topRadius );
-  let endMu = clamp( ( r * mu + d ) / max( 1.0, endRadius ), -1.0, 1.0 );
-
-  var numerator = sampleTransmittance( lut, r, mu, bottomRadius, topRadius, lutSize );
-  var denominator = sampleTransmittance(
-    lut, endRadius, endMu, bottomRadius, topRadius, lutSize );
-
-  if ( groundHit > 0.5 ) {
-    numerator = sampleTransmittance(
-      lut, endRadius, -endMu, bottomRadius, topRadius, lutSize );
-    denominator = sampleTransmittance( lut, r, -mu, bottomRadius, topRadius, lutSize );
-  }
-
-  return clamp(
-    numerator / max( denominator, vec3<f32>( 1e-6 ) ),
-    vec3<f32>( 0.0 ),
-    vec3<f32>( 1.0 ) );
-}
-`;
-
-/**
  * The scattering integrator.
  *
  * `viewPosition` is the camera relative to the planet's centre, so the maths
@@ -145,8 +105,12 @@ fn skyRadiance(
   rayleighScattering: vec3<f32>,
   rayleighScaleHeight: f32,
   mieScattering: f32,
+  mieExtinction: f32,
   mieScaleHeight: f32,
   miePhaseG: f32,
+  ozoneAbsorption: vec3<f32>,
+  ozoneCentre: f32,
+  ozoneWidth: f32,
   sunIntensity: f32,
   lut: texture_2d<f32>,
   lutSize: vec2<f32>
@@ -175,9 +139,7 @@ fn skyRadiance(
   var end = -r * mu + topSqrt;
 
   let groundDisc = r * r * ( mu * mu - 1.0 ) + bottomRadius * bottomRadius;
-  var groundHit = 0.0;
   if ( mu < 0.0 && groundDisc >= 0.0 ) {
-    groundHit = 1.0;
     end = max( 0.0, -r * mu - sqrt( groundDisc ) );
   }
 
@@ -189,10 +151,10 @@ fn skyRadiance(
   let miePhaseValue = miePhaseHG( nu, miePhaseG );
 
   var radiance = vec3<f32>( 0.0 );
+  // Transmittance from the eye to the current sample, carried along the march.
+  var throughput = vec3<f32>( 1.0 );
 
   for ( var i = 0; i < ${SHADER_SAMPLES}; i = i + 1 ) {
-    // Midpoint rule: sampling at segment edges over-weights the dense air
-    // nearest the viewer and visibly over-brightens the horizon.
     let d = start + stepSize * ( f32( i ) + 0.5 );
 
     let sampleRadius = sqrt( max( 0.0, d * d + 2.0 * r * mu * d + r * r ) );
@@ -208,14 +170,30 @@ fn skyRadiance(
         lut, sampleRadius, sampleMuSun, bottomRadius, topRadius, lutSize );
     }
 
-    let viewT = segmentTransmittance(
-      lut, r, mu, d, bottomRadius, topRadius, groundHit, lutSize );
+    let rayleighDensity = exp( -altitude / rayleighScaleHeight );
+    let mieDensity = exp( -altitude / mieScaleHeight );
+    let ozoneDensity = max( 0.0, 1.0 - abs( altitude - ozoneCentre ) / ozoneWidth );
 
-    let rayleigh = rayleighScattering * exp( -altitude / rayleighScaleHeight );
-    let mie = mieScattering * exp( -altitude / mieScaleHeight );
+    let rayleigh = rayleighScattering * rayleighDensity;
+    let mie = mieScattering * mieDensity;
 
-    let scattered = rayleigh * rayleighPhaseValue + vec3<f32>( mie * miePhaseValue );
-    radiance = radiance + scattered * sunT * viewT * stepSize;
+    let scattered = ( rayleigh * rayleighPhaseValue + vec3<f32>( mie * miePhaseValue ) ) * sunT;
+
+    // Total extinction, including ozone, which absorbs without scattering.
+    let extinction = max(
+      rayleighScattering * rayleighDensity
+        + vec3<f32>( mieExtinction * mieDensity )
+        + ozoneAbsorption * ozoneDensity,
+      vec3<f32>( 1e-12 ) );
+
+    // Integrate the segment in closed form rather than sampling its midpoint:
+    // this accounts for light scattered near the start being attenuated across
+    // the rest of the segment, and converges in far fewer steps.
+    let segmentT = exp( -extinction * stepSize );
+    let integrated = ( scattered - scattered * segmentT ) / extinction;
+
+    radiance = radiance + throughput * integrated;
+    throughput = throughput * segmentT;
   }
 
   return radiance * sunIntensity;

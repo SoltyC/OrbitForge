@@ -18,12 +18,17 @@ import {
   radiusAt,
 } from './geometry.js';
 import type { AtmosphereModel, Spectrum } from './model.js';
-import { mieScatteringAt, rayleighScatteringAt } from './model.js';
+import { extinctionAt, mieScatteringAt, rayleighScatteringAt } from './model.js';
 import type { TransmittanceLut } from './transmittance.js';
-import { transmittanceOverSegment, transmittanceToSun } from './transmittance.js';
+import { transmittanceToSun } from './transmittance.js';
 
-/** Raymarch steps through the atmosphere for a sky sample. */
-export const SCATTERING_SAMPLES = 32;
+/**
+ * Raymarch steps through the atmosphere for a sky sample.
+ *
+ * Modest because each segment is integrated analytically rather than sampled
+ * at a point, which converges far faster than a plain midpoint sum.
+ */
+export const SCATTERING_SAMPLES = 16;
 
 /**
  * Rayleigh phase function.
@@ -117,11 +122,10 @@ export function integrateScattering(
   const miePhaseValue = miePhase(nu, model.miePhaseG);
 
   const radiance: [number, number, number] = [0, 0, 0];
+  // Transmittance from the eye to the current sample, carried along the march.
+  const throughput: [number, number, number] = [1, 1, 1];
 
   for (let i = 0; i < SCATTERING_SAMPLES; i++) {
-    // Sample at segment midpoints: a midpoint rule converges much faster here
-    // than sampling at the near edge, which systematically over-weights the
-    // dense air close to the viewer.
     const d = start + step * (i + 0.5);
 
     const sampleRadius = radiusAt(r, mu, d);
@@ -129,30 +133,36 @@ export function integrateScattering(
     const sampleMuSun = muSunAt(r, muSun, nu, d);
 
     const sunTransmittance = transmittanceToSun(lut, sampleRadius, sampleMuSun);
-    const viewTransmittance = transmittanceOverSegment(lut, r, mu, d);
-
     const rayleigh = rayleighScatteringAt(model, altitude);
     const mie = mieScatteringAt(model, altitude);
+    const extinction = extinctionAt(model, altitude);
 
     const multiple = params.multipleScattering?.(sampleRadius, sampleMuSun) ?? [0, 0, 0];
 
     for (let c = 0; c < 3; c++) {
-      const rayleighTerm = rayleigh[c]! * rayleighPhaseValue;
-      const mieTerm = mie * miePhaseValue;
+      // Light scattered towards the eye from this point: direct sunlight that
+      // survived the trip down, plus any ambient already bouncing around.
+      const scattered =
+        (rayleigh[c]! * rayleighPhaseValue + mie * miePhaseValue) * sunTransmittance[c]! +
+        (rayleigh[c]! + mie) * multiple[c]!;
 
-      // Direct sunlight scattered once into the eye...
-      const single = (rayleighTerm + mieTerm) * sunTransmittance[c]!;
-      // ...plus ambient light that has already bounced around the sky.
-      const multi = (rayleigh[c]! + mie) * multiple[c]!;
+      const sigma = Math.max(1e-12, extinction[c]!);
+      const segmentTransmittance = Math.exp(-sigma * step);
 
-      radiance[c]! += (single + multi) * viewTransmittance[c]! * step;
+      // Integrate the segment in closed form instead of sampling its midpoint.
+      // Scattering and extinction both vary along it, and this accounts for
+      // light scattered near the start being attenuated across the rest.
+      const integrated = (scattered - scattered * segmentTransmittance) / sigma;
+
+      radiance[c]! += throughput[c]! * integrated;
+      throughput[c]! *= segmentTransmittance;
     }
   }
 
   const scale = model.solarIrradiance;
   return {
     radiance: [radiance[0] * scale[0], radiance[1] * scale[1], radiance[2] * scale[2]],
-    transmittance: transmittanceOverSegment(lut, r, mu, end),
+    transmittance: throughput,
     hitGround: rayHitsGround,
   };
 }

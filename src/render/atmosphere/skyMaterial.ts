@@ -14,7 +14,7 @@
  */
 import {
   AdditiveBlending,
-  DoubleSide,
+  BackSide,
   Mesh,
   NodeMaterial,
   SphereGeometry,
@@ -28,7 +28,6 @@ import { createTransmittanceTexture } from './lutTexture.js';
 import {
   MIE_PHASE_WGSL,
   SAMPLE_TRANSMITTANCE_WGSL,
-  SEGMENT_TRANSMITTANCE_WGSL,
   SKY_RADIANCE_WGSL,
   TRANSMITTANCE_UV_WGSL,
 } from './skyShader.js';
@@ -44,8 +43,18 @@ function includes(...helpers: unknown[]): never[] {
   return helpers as never[];
 }
 
-/** Segments on the shell. It is only ever seen as a smooth gradient. */
-const SHELL_SEGMENTS = 96;
+/**
+ * Segments on the shell. The view ray is interpolated across each triangle, so
+ * too coarse a sphere distorts the angular mapping; this is ample and vertex
+ * cost here is irrelevant.
+ */
+const SHELL_SEGMENTS = 64;
+
+/**
+ * Radius of the enclosing shell. Far beyond anything else in the system but
+ * comfortably inside the camera's far plane.
+ */
+const SHELL_RADIUS = 2e8;
 
 /**
  * Scales radiance into a displayable range. The model works in physical units
@@ -74,14 +83,10 @@ export function createSkyView(model: AtmosphereModel): SkyView {
   const miePhase = wgslFn(MIE_PHASE_WGSL);
   const transmittanceUv = wgslFn(TRANSMITTANCE_UV_WGSL);
   const sampleTransmittance = wgslFn(SAMPLE_TRANSMITTANCE_WGSL, includes(transmittanceUv));
-  const segmentTransmittance = wgslFn(
-    SEGMENT_TRANSMITTANCE_WGSL,
-    includes(sampleTransmittance),
-  );
 
   const skyRadiance = wgslFn(
     SKY_RADIANCE_WGSL,
-    includes(miePhase, transmittanceUv, sampleTransmittance, segmentTransmittance),
+    includes(miePhase, transmittanceUv, sampleTransmittance),
   );
 
   // Everything the integrator needs, in the planet's own frame.
@@ -101,8 +106,16 @@ export function createSkyView(model: AtmosphereModel): SkyView {
     ),
     rayleighScaleHeight: model.rayleighScaleHeight,
     mieScattering: model.mieScattering,
+    mieExtinction: model.mieExtinction,
     mieScaleHeight: model.mieScaleHeight,
     miePhaseG: model.miePhaseG,
+    ozoneAbsorption: vec3(
+      model.ozoneAbsorption[0],
+      model.ozoneAbsorption[1],
+      model.ozoneAbsorption[2],
+    ),
+    ozoneCentre: model.ozoneCentre,
+    ozoneWidth: model.ozoneWidth,
     sunIntensity: DEFAULT_SUN_INTENSITY,
     lut: texture(lutTexture),
     lutSize,
@@ -113,11 +126,27 @@ export function createSkyView(model: AtmosphereModel): SkyView {
   material.transparent = true;
   material.blending = AdditiveBlending;
   material.depthWrite = false;
-  // Seen from inside and outside, so neither face can be culled.
-  material.side = DoubleSide;
+  // Depth testing is kept on deliberately. The shell sits far away, so it is
+  // rejected wherever solid geometry has already been drawn: early-z discards
+  // most of the work for free, and the ray's full-atmosphere haze does not get
+  // painted over a rocket sixty metres from the camera. The limb, which is sky
+  // seen past the planet's silhouette, is unaffected.
+  //
+  // The cost is no aerial perspective over the surface itself; that arrives
+  // with the terrain shader in milestone 7, where there is a surface worth
+  // attenuating.
+  material.depthTest = true;
+  material.side = BackSide;
 
+  // A shell large enough that the camera is always inside it.
+  //
+  // The shader only uses the geometry to interpolate a view direction, so the
+  // radius is free — and being reliably inside a back-facing sphere means each
+  // pixel is shaded exactly once. A shell at the atmosphere's own radius needed
+  // DoubleSide, which shaded every pixel twice from outside: double the cost,
+  // and double the brightness, since the two layers both add their radiance.
   const mesh = new Mesh(
-    new SphereGeometry(model.topRadius, SHELL_SEGMENTS, SHELL_SEGMENTS / 2),
+    new SphereGeometry(SHELL_RADIUS, SHELL_SEGMENTS, SHELL_SEGMENTS / 2),
     material,
   );
   mesh.name = 'atmosphere';
