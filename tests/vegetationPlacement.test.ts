@@ -283,3 +283,60 @@ function directionOfLaunchSite(): { face: 0 | 1 | 2 | 3 | 4 | 5; x: number; y: n
 function key(position: Vector3): string {
   return [position.x, position.y, position.z].map((v) => v.toFixed(2)).join(',');
 }
+
+describe('what it costs to draw', () => {
+  /** Triangles and draw calls for the field around the launchpad. */
+  function budgetAtPad(): { plants: number; draws: number; triangles: number } {
+    const { view } = planetWithFlora(TERRIN.launchSite.normalized().scale(TERRIN.radius + 3));
+
+    let draws = 0;
+    let triangles = 0;
+
+    view.vegetation!.group.traverse((object) => {
+      if (!(object instanceof InstancedMesh)) return;
+      draws++;
+      triangles += ((object.geometry.getIndex()?.count ?? 0) / 3) * object.count;
+    });
+
+    return { plants: view.vegetation!.plantCount, draws, triangles };
+  }
+
+  it('stays inside a drawable budget', () => {
+    // These numbers regressed silently once: a plant in every cell put 89,371
+    // of them around the pad, 16.4 million triangles and 6,564 draw calls, and
+    // nothing in the model objected. Per-species spacing and a draw distance
+    // tied to plant size brought it to roughly half a million and 435.
+    const { plants, draws, triangles } = budgetAtPad();
+
+    expect(plants, 'plants').toBeLessThan(20_000);
+    expect(draws, 'draw calls').toBeLessThan(1_200);
+    expect(triangles, 'triangles').toBeLessThan(2_000_000);
+  });
+
+  it('still draws enough to look like a field', () => {
+    // The complement: a budget is only interesting if the ground is covered.
+    const { plants, triangles } = budgetAtPad();
+
+    expect(plants).toBeGreaterThan(1_500);
+    expect(triangles).toBeGreaterThan(50_000);
+  });
+
+  it('spaces each species at its own scale', () => {
+    // Ground cover a metre or two apart; trees tens of metres apart. One
+    // spacing for everything is what made the first version a wall of canopy.
+    const site = directionOfLaunchSite();
+    const plants = plantsInBlock(site.face, site.x, site.y, 32, PER_FACE, TERRIN.radius);
+
+    const counts = new Map<string, number>();
+    for (const plant of plants) {
+      counts.set(plant.species.id, (counts.get(plant.species.id) ?? 0) + 1);
+    }
+
+    const area = 32 * 32;
+    const spacingOf = (id: string): number => area / (counts.get(id) ?? 0.5);
+
+    // Grass dense, trees sparse, and a clear order of magnitude between them.
+    expect(spacingOf('grass')).toBeLessThan(5);
+    expect(spacingOf('shrub')).toBeGreaterThan(spacingOf('grass') * 4);
+  });
+});

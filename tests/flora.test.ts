@@ -63,6 +63,34 @@ describe('the species catalogue', () => {
   });
 });
 
+/**
+ * Every species that can grow in a place, swept across cells and rolls.
+ *
+ * Species sit on their own spacing grids, so a single cell only ever offers
+ * the few whose grid includes it; sampling one cell repeatedly reports a
+ * fraction of what actually grows there.
+ */
+function mixAt(elevation: number, slope: number, warmth: number): Set<string> {
+  const found = new Set<string>();
+
+  for (let cell = 0; cell < 400; cell++) {
+    for (let roll = 0; roll < 8; roll++) {
+      const species = pickSpecies(
+        roll / 8,
+        elevation,
+        slope,
+        warmth,
+        cell % 20,
+        Math.floor(cell / 20),
+        1,
+      );
+      if (species) found.add(species.id);
+    }
+  }
+
+  return found;
+}
+
 describe('where species grow', () => {
   it('refuses ground outside its range', () => {
     const conifer = speciesById('conifer');
@@ -99,32 +127,18 @@ describe('where species grow', () => {
   });
 
   it('grows a mix in one place rather than a monoculture', () => {
-    // Weighted selection, so a hillside is not a thousand copies of whichever
-    // species happened to score highest.
-    const chosen = new Set<string>();
-    for (let i = 0; i < 200; i++) {
-      const species = pickSpecies(i / 200, 500, 0.15, 0.55);
-      if (species) chosen.add(species.id);
-    }
-
-    expect(chosen.size).toBeGreaterThanOrEqual(4);
+    // Swept across cells, because each species is only a candidate on its own
+    // spacing grid — asking one cell repeatedly only ever offers the handful
+    // of species whose grid happens to include it.
+    expect(mixAt(500, 0.15, 0.55).size).toBeGreaterThanOrEqual(4);
   });
 
   it('shifts the mix as conditions change', () => {
     // Compared as distributions, not as single picks. Grass grows nearly
     // everywhere and is the most abundant species, so one roll lands on it in
     // both places — which says nothing about whether the mix differs.
-    const mixAt = (elevation: number, warmth: number): Set<string> => {
-      const found = new Set<string>();
-      for (let i = 0; i < 200; i++) {
-        const species = pickSpecies(i / 200, elevation, 0.1, warmth);
-        if (species) found.add(species.id);
-      }
-      return found;
-    };
-
-    const coast = mixAt(60, 0.85);
-    const alpine = mixAt(2_200, 0.2);
+    const coast = mixAt(60, 0.1, 0.85);
+    const alpine = mixAt(2_200, 0.1, 0.2);
 
     // Palms on a warm coast, never at altitude in the cold.
     expect(coast.has('palm')).toBe(true);

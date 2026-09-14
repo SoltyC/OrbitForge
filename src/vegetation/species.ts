@@ -63,6 +63,18 @@ export interface Species {
    * suit it. Relative, not absolute — these are normalised at selection.
    */
   readonly abundance: number;
+
+  /**
+   * Metres between individuals of this species.
+   *
+   * The single most important number here. Ground cover can sit a metre apart;
+   * a mature tree cannot, and placing one in every cell put ninety thousand
+   * plants and sixteen million triangles around the launchpad — a wall of
+   * canopy with no ground visible between it, which is both unaffordable and
+   * wrong. Each species is placed on its own coarser grid, so a forest has
+   * trees with space between them and grass filling the gaps.
+   */
+  readonly spacing: number;
 }
 
 /**
@@ -89,6 +101,7 @@ export const SPECIES: readonly Species[] = [
     maxSlope: 0.6,
     warmth: { min: 0, max: 0.55 },
     abundance: 1,
+    spacing: 11,
   },
   {
     id: 'broadleaf',
@@ -105,6 +118,7 @@ export const SPECIES: readonly Species[] = [
     maxSlope: 0.45,
     warmth: { min: 0.3, max: 0.9 },
     abundance: 1.1,
+    spacing: 13,
   },
   {
     id: 'palm',
@@ -121,6 +135,7 @@ export const SPECIES: readonly Species[] = [
     maxSlope: 0.3,
     warmth: { min: 0.62, max: 1 },
     abundance: 0.7,
+    spacing: 10,
   },
   {
     id: 'shrub',
@@ -137,6 +152,7 @@ export const SPECIES: readonly Species[] = [
     maxSlope: 0.7,
     warmth: { min: 0, max: 1 },
     abundance: 1.8,
+    spacing: 4,
   },
   {
     id: 'fern',
@@ -153,6 +169,7 @@ export const SPECIES: readonly Species[] = [
     maxSlope: 0.55,
     warmth: { min: 0.35, max: 1 },
     abundance: 1.4,
+    spacing: 3,
   },
   {
     id: 'flowering',
@@ -170,6 +187,7 @@ export const SPECIES: readonly Species[] = [
     maxSlope: 0.5,
     warmth: { min: 0.25, max: 0.95 },
     abundance: 0.9,
+    spacing: 2,
   },
   {
     id: 'grass',
@@ -186,6 +204,7 @@ export const SPECIES: readonly Species[] = [
     maxSlope: 0.65,
     warmth: { min: 0, max: 1 },
     abundance: 4,
+    spacing: 1,
   },
   {
     id: 'boulder',
@@ -202,6 +221,7 @@ export const SPECIES: readonly Species[] = [
     maxSlope: 2,
     warmth: { min: 0, max: 1 },
     abundance: 0.8,
+    spacing: 7,
   },
 ];
 
@@ -235,21 +255,68 @@ export function suitability(
 }
 
 /**
- * Pick a species for one plant, given a roll in [0, 1].
+ * Whether a cell is on a given species' own placement grid.
  *
- * Weighted by suitability times abundance, so a place grows the mix that suits
- * it rather than one winner — which is what stops a hillside being a thousand
- * copies of whichever species scored highest.
+ * Each species is offset by its own hash, so they do not all land on the same
+ * cells — otherwise every tree would have a bush growing out of it and most of
+ * the ground would be bare.
+ */
+export function onSpeciesGrid(
+  species: Species,
+  cellX: number,
+  cellY: number,
+  cellSize: number,
+): boolean {
+  const stride = Math.max(1, Math.round(species.spacing / cellSize));
+  if (stride === 1) return true;
+
+  // A stable per-species offset, from the id.
+  let hash = 0;
+  for (let i = 0; i < species.id.length; i++) {
+    hash = (hash * 31 + species.id.charCodeAt(i)) | 0;
+  }
+
+  const offsetX = ((hash % stride) + stride) % stride;
+  const offsetY = (((hash >> 8) % stride) + stride) % stride;
+
+  return (
+    (((cellX - offsetX) % stride) + stride) % stride === 0 &&
+    (((cellY - offsetY) % stride) + stride) % stride === 0
+  );
+}
+
+/**
+ * Pick a species for one cell, given a roll in [0, 1].
+ *
+ * Only species whose own placement grid includes this cell are candidates, and
+ * among those the choice is weighted by suitability times abundance — so a
+ * place grows the mix that suits it rather than one winner, and each kind sits
+ * at its own natural spacing.
  */
 export function pickSpecies(
   roll: number,
   elevation: number,
   slope: number,
   warmth: number,
+  cellX = 0,
+  cellY = 0,
+  cellSize = 1,
 ): Species | null {
-  const weights = SPECIES.map(
-    (species) => suitability(species, elevation, slope, warmth) * species.abundance,
-  );
+  const weights = SPECIES.map((species) => {
+    if (!onSpeciesGrid(species, cellX, cellY, cellSize)) return 0;
+
+    // Scale by how rarely this species is even offered a cell.
+    //
+    // A tree on an eleven-metre grid is a candidate in one cell in a hundred,
+    // and in that cell it still has to out-roll grass — which is a candidate
+    // everywhere and four times as abundant. Without this correction the
+    // common species win the rare species' own cells too, and a forest comes
+    // out as a lawn: measured at zero trees anywhere near the launch site.
+    const stride = Math.max(1, Math.round(species.spacing / cellSize));
+    const rarity = stride * stride;
+
+    return suitability(species, elevation, slope, warmth) * species.abundance * rarity;
+  });
 
   const total = weights.reduce((sum, weight) => sum + weight, 0);
   if (total <= 0) return null;

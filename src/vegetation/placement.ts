@@ -143,6 +143,9 @@ export function plantsInBlock(
         elevation,
         slope,
         warmthAt(direction, elevation),
+        cellX,
+        cellY,
+        vegetation.cellSize,
       );
       if (!species) continue;
 

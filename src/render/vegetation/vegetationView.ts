@@ -65,8 +65,38 @@ const DRAW_DISTANCE = 150;
 /** Above this altitude nothing is drawn (m). */
 const MAX_ALTITUDE = 900;
 
-/** Pre-grown shapes per species. */
-const VARIANTS = 8;
+/**
+ * Pre-grown shapes per species.
+ *
+ * Four rather than eight: every variant is its own geometry and so its own
+ * draw call per patch, and eight put nearly four thousand of them on screen.
+ * The per-instance matrix still varies scale, facing and lean on top, so four
+ * distinct silhouettes is enough that the eye does not find the repeat.
+ */
+const VARIANTS = 4;
+
+/**
+ * How far a plant of a given height is worth drawing (m).
+ *
+ * Undergrowth is the whole cost. Grass sits a metre apart, so a 150 m radius
+ * holds some seventy thousand tufts — three million triangles for something
+ * indistinguishable from ground colour past about forty metres. Tying the
+ * distance to the plant's own size keeps the trees, which are visible from far
+ * off and sparse enough to be cheap, and drops the rest as it stops mattering.
+ */
+function drawDistanceFor(height: number): number {
+  return Math.min(DRAW_DISTANCE, 14 + height * 11);
+}
+
+/**
+ * Near edges of the distance bands a patch can be built for (m).
+ *
+ * A patch takes the largest band at or below its own distance, and then keeps
+ * only plants still worth drawing that far out. Caching by band means walking
+ * towards a patch rebuilds it with its undergrowth rather than leaving bare
+ * ground, and walking away drops it again.
+ */
+const BANDS: readonly number[] = [0, 40, 90];
 
 /** Milliseconds of patch building per frame. */
 const BUDGET_MS = 4;
@@ -89,6 +119,8 @@ interface QueuedPatch {
   readonly face: FaceIndex;
   readonly x: number;
   readonly y: number;
+  /** Distance band this patch is being built for (m). */
+  readonly band: number;
 }
 
 export class VegetationView {
@@ -156,7 +188,15 @@ export class VegetationView {
 
     for (let y = -reach; y <= reach; y++) {
       for (let x = -reach; x <= reach; x++) {
-        const key = `${here.face}/${centreX + x}/${centreY + y}`;
+        // Distance to the patch, in patch widths, then in metres.
+        const distance = Math.hypot(x, y) * patchSize;
+        if (distance > DRAW_DISTANCE) continue;
+
+        // The largest band at or below this patch's distance.
+        let band = 0;
+        for (const edge of BANDS) if (distance >= edge) band = edge;
+
+        const key = `${here.face}/${centreX + x}/${centreY + y}/${band}`;
         wanted.add(key);
 
         const existing = this.patches.get(key);
@@ -164,7 +204,7 @@ export class VegetationView {
           existing.lastUsed = this.frame;
           existing.group.visible = true;
         } else {
-          this.queue.push({ face: here.face, x: centreX + x, y: centreY + y });
+          this.queue.push({ face: here.face, x: centreX + x, y: centreY + y, band });
         }
       }
     }
@@ -191,7 +231,7 @@ export class VegetationView {
 
     while (this.queue.length > 0 && performance.now() < deadline) {
       const next = this.queue.shift()!;
-      const key = `${next.face}/${next.x}/${next.y}`;
+      const key = `${next.face}/${next.x}/${next.y}/${next.band}`;
       if (this.patches.has(key)) continue;
 
       const group = this.buildPatch(next);
@@ -225,7 +265,7 @@ export class VegetationView {
    */
   private buildPatch(patch: QueuedPatch): Group {
     const group = new Group();
-    group.name = `flora:${patch.face}/${patch.x}/${patch.y}`;
+    group.name = `flora:${patch.face}/${patch.x}/${patch.y}@${patch.band}`;
 
     // Keyed by species and variant, since each variant is its own geometry.
     const batches = new Map<string, { species: Species; variant: number; matrices: Matrix4[] }>();
@@ -246,6 +286,9 @@ export class VegetationView {
     );
 
     plants.forEach((plant, index) => {
+      // Drop anything too small to be worth drawing this far out.
+      if (drawDistanceFor(plant.traits.height) < patch.band) return;
+
       {
         const variant = Math.floor(
           hashUnit(baseX + index, baseY + index * 7, this.profile.seed + 601) * VARIANTS,
