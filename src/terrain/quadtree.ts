@@ -25,8 +25,11 @@ import { FACE_COUNT, faceToDirection } from './cubeSphere.js';
  * Split while the camera is nearer than this many chunk widths.
  *
  * Higher means more, smaller chunks: better silhouettes and more draw calls.
+ * At 2.5 the terrain a launch actually looks down on was four times coarser
+ * than it needed to be — the chunk budget went on detail directly underfoot
+ * that nothing was looking at.
  */
-export const SPLIT_RATIO = 2.5;
+export const SPLIT_RATIO = 4;
 
 /** Deepest subdivision. At Terrin's radius this is a few metres across. */
 export const MAX_DEPTH = 14;
@@ -103,7 +106,9 @@ export interface SelectionOptions {
 export function selectChunks(options: SelectionOptions): Chunk[] {
   const splitRatio = options.splitRatio ?? SPLIT_RATIO;
   const maxDepth = options.maxDepth ?? MAX_DEPTH;
-  const maxChunks = options.maxChunks ?? 512;
+  // Beyond about this many, subdivision depth saturates and further chunks buy
+  // no detail at any altitude — only generation time.
+  const maxChunks = options.maxChunks ?? 900;
 
   const selected: Chunk[] = [];
 

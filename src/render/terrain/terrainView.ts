@@ -26,11 +26,16 @@ import { DEFAULT_TERRAIN } from '../../terrain/height.js';
 import type { Chunk } from '../../terrain/quadtree.js';
 import { chunkKey, selectChunks } from '../../terrain/quadtree.js';
 
-/** Milliseconds of chunk building per frame. */
-const BUDGET_MS = 3;
+/**
+ * Milliseconds of chunk building per frame.
+ *
+ * The visible set costs about a second and a half to build outright, so this
+ * spreads it over roughly three seconds of play rather than dropping a frame.
+ */
+const BUDGET_MS = 8;
 
 /** Cap on chunks kept in memory; the furthest are evicted first. */
-const CACHE_LIMIT = 700;
+const CACHE_LIMIT = 1_200;
 
 /**
  * How far the camera must move before chunks are reselected, as a fraction of

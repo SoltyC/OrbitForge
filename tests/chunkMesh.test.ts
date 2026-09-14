@@ -246,9 +246,27 @@ describe('chunk seams', () => {
   });
 });
 
+function sum(colour: readonly number[]): number {
+  return colour[0]! + colour[1]! + colour[2]!;
+}
+
 describe('surface colour', () => {
-  it('paints anything at or below sea level as ocean', () => {
-    expect(surfaceColour(0, 0)).toEqual(surfaceColour(-500, 0));
+  it('paints everything below sea level as water', () => {
+    for (const depth of [0, -50, -500, -3_000]) {
+      const colour = surfaceColour(depth, 0);
+      // Blue: more blue than red, and never bright.
+      expect(colour[2]).toBeGreaterThan(colour[0]);
+      expect(colour[2]).toBeLessThan(0.6);
+    }
+  });
+
+  it('darkens the sea with depth', () => {
+    // One flat tone for the whole ocean leaves every coastline a hard step,
+    // because the flattening puts every underwater vertex at exactly zero.
+    const shallow = surfaceColour(-20, 0);
+    const deep = surfaceColour(-2_500, 0);
+
+    expect(sum(deep)).toBeLessThan(sum(shallow));
   });
 
   it('greens the lowlands and whitens the peaks', () => {

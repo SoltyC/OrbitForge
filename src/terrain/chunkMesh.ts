@@ -26,8 +26,14 @@ import { DEFAULT_TERRAIN, elevationAt } from './height.js';
 /**
  * Vertices along one edge of a chunk. Every chunk has the same topology, so
  * the index buffer is built once and shared.
+ *
+ * Measured rather than picked. At 17 the ground was 1.3 km per vertex from
+ * orbit, which smooths mountain ranges into swells and quantises every
+ * coastline into a staircase of grid cells. Doubling it, together with a wider
+ * split ratio, brings that to 325 m — and 20 m at five kilometres up, where
+ * most of a launch is actually spent looking down.
  */
-export const CHUNK_RESOLUTION = 17;
+export const CHUNK_RESOLUTION = 33;
 
 /**
  * How far the skirt hangs below the chunk's rim, as a fraction of its size.
@@ -136,6 +142,7 @@ export function buildChunkGeometry(
 
   const borderDirections: Vec3[] = new Array(stride * stride);
   const borderRadii = new Float64Array(stride * stride);
+  const borderElevations = new Float64Array(stride * stride);
 
   let maxElevation = -Infinity;
 
@@ -150,6 +157,7 @@ export function buildChunkGeometry(
 
       const index = y * stride + x;
       borderDirections[index] = direction;
+      borderElevations[index] = elevation;
       // Below sea level is flattened to it: the ocean is a surface, not a bed.
       borderRadii[index] = planetRadius + Math.max(0, elevation);
 
@@ -189,8 +197,11 @@ export function buildChunkGeometry(
       normals[index * 3 + 1] = normal.y;
       normals[index * 3 + 2] = normal.z;
 
+      // The true elevation, not the clamped radius. Every ocean vertex sits at
+      // exactly sea level once flattened, so colouring from the radius makes
+      // the whole sea one flat tone and the shoreline a hard step.
       const colour = surfaceColour(
-        radii[index]! - planetRadius,
+        borderElevations[(y + 1) * stride + (x + 1)]!,
         1 - normal.dot(direction),
         profile,
       );
@@ -294,7 +305,8 @@ const SAND: Colour = [0.62, 0.57, 0.38];
 const GRASS: Colour = [0.18, 0.34, 0.16];
 const ROCK: Colour = [0.34, 0.31, 0.28];
 const SNOW: Colour = [0.86, 0.88, 0.92];
-const OCEAN: Colour = [0.04, 0.13, 0.28];
+const SHALLOWS: Colour = [0.10, 0.28, 0.42];
+const DEEP_OCEAN: Colour = [0.02, 0.08, 0.20];
 
 /**
  * Ground colour from elevation and slope.
@@ -308,7 +320,11 @@ export function surfaceColour(
   slope: number,
   profile: TerrainProfile = DEFAULT_TERRAIN,
 ): Colour {
-  if (elevation <= 0) return OCEAN;
+  if (elevation <= 0) {
+    // Shading the sea by depth gives coastlines a shelf to fade across, in
+    // place of the single flat tone that made every shore a hard edge.
+    return mix(SHALLOWS, DEEP_OCEAN, clamp01(-elevation / (profile.oceanDepth * 0.5)));
+  }
 
   const height = elevation / (profile.continentAmplitude + profile.mountainAmplitude);
 
