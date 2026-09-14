@@ -16,9 +16,18 @@ import {
 } from 'three/webgpu';
 import { chainToRoot } from '../bodies/ephemeris.js';
 import { BODIES, parentOf } from '../bodies/system.js';
+import type { Object3D } from 'three/webgpu';
 import type { Body } from '../bodies/types.js';
 import { stateFromElements } from '../sim/orbit.js';
-import type { Vec3 } from '../sim/vec3.js';
+import { Vec3 } from '../sim/vec3.js';
+import { createAtmosphereModel } from '../atmosphere/model.js';
+import type { AtmosphereModel } from '../atmosphere/model.js';
+import { integrateScattering } from '../atmosphere/scattering.js';
+import { buildTransmittanceLut } from '../atmosphere/transmittance.js';
+import type { TransmittanceLut } from '../atmosphere/transmittance.js';
+import { DEFAULT_CLOUD_LAYER } from '../clouds/density.js';
+import { CloudBakeRunner } from './clouds/cloudBakeRunner.js';
+import { uploadCloudTextures } from './clouds/cloudTextureUpload.js';
 import { createPlanetView, updatePlanetRotation } from './planet.js';
 import { SUN_DIRECTION } from './renderer.js';
 import type { PlanetView } from './planet.js';
@@ -32,11 +41,15 @@ interface BodyEntry {
   readonly parent: Body | null;
   readonly view: PlanetView;
   readonly orbitLine: LineLoop | null;
+  /** Present only for bodies with an atmosphere, for sky-brightness queries. */
+  readonly model: AtmosphereModel | null;
+  readonly lut: TransmittanceLut | null;
 }
 
 export class SystemView {
   readonly group = new Group();
   private readonly entries: BodyEntry[] = [];
+  private readonly bakes = new Map<string, CloudBakeRunner>();
 
   constructor() {
     this.group.name = 'system';
@@ -46,11 +59,113 @@ export class SystemView {
       const view = createPlanetView(body);
       const orbitLine = parent ? buildBodyOrbit(body, parent) : null;
 
+      // The same model the shader uses, kept on the CPU so the renderer can
+      // ask how bright the sky is without reading back from the GPU.
+      const model = createAtmosphereModel(body);
+      const lut = model ? buildTransmittanceLut(model) : null;
+
       this.group.add(view.group);
       if (orbitLine) this.group.add(orbitLine);
 
-      this.entries.push({ body, parent, view, orbitLine });
+      this.entries.push({ body, parent, view, orbitLine, model, lut });
+
+      // Bodies with a sky get clouds, once their noise has finished baking.
+      if (view.sky) this.bakes.set(body.id, new CloudBakeRunner(DEFAULT_CLOUD_LAYER.seed));
     }
+  }
+
+  /**
+   * Advance any outstanding cloud bakes, handing over the textures on the
+   * frame each one finishes. Cheap no-op once they are all done.
+   */
+  stepCloudBakes(): void {
+    for (const [bodyId, runner] of this.bakes) {
+      const baked = runner.step();
+      if (!baked) continue;
+
+      const entry = this.entries.find((candidate) => candidate.body.id === bodyId);
+      entry?.view.sky?.setCloudTextures(uploadCloudTextures(baked));
+      this.bakes.delete(bodyId);
+    }
+  }
+
+  /**
+   * Keep terrain in step with the camera and spend a little time building it.
+   *
+   * The camera is given in the vessel's frame, so it is converted into each
+   * body's own rotating frame first — chunks are fixed to the ground, and a
+   * camera position that ignored the planet's spin would drag the level of
+   * detail around the surface as the day went on.
+   */
+  updateTerrain(vesselBody: Body, vesselPosition: Vec3, time: number): void {
+    for (const entry of this.entries) {
+      const terrain = entry.view.terrain;
+      if (!terrain) continue;
+
+      const relative = relativeToBody(entry.body, vesselBody, vesselPosition, time);
+      terrain.update(unrotate(entry.body, relative, time));
+      terrain.step();
+    }
+  }
+
+  /** Chunks still queued across every body, for reporting progress. */
+  get pendingChunks(): number {
+    return this.entries.reduce(
+      (total, entry) => total + (entry.view.terrain?.pending ?? 0),
+      0,
+    );
+  }
+
+  /**
+   * The atmosphere shells, which draw in the reduced-resolution sky pass.
+   * Smooth gradients, so they lose nothing to it.
+   */
+  get skyMeshes(): Object3D[] {
+    return this.entries.flatMap((entry) => (entry.view.sky ? [entry.view.sky.mesh] : []));
+  }
+
+  /**
+   * The solid bodies and their orbit lines, which draw at full resolution
+   * because they have edges worth resolving.
+   */
+  get surfaceMeshes(): Object3D[] {
+    return this.entries.flatMap((entry) => {
+      const objects: Object3D[] = [entry.view.surface];
+      if (entry.view.terrain) objects.push(entry.view.terrain.group);
+      if (entry.orbitLine) objects.push(entry.orbitLine);
+      return objects;
+    });
+  }
+
+  /**
+   * Sky brightness overhead at a viewpoint, in the atmosphere model's units.
+   * Used to decide how far to fade the stars; zero for an airless body.
+   */
+  skyBrightnessAt(body: Body, altitude: number): number {
+    const entry = this.entries.find((candidate) => candidate.body.id === body.id);
+    const model = entry?.model;
+    const lut = entry?.lut;
+    if (!model || !lut) return 0;
+
+    const sky = integrateScattering(model, lut, {
+      r: model.bottomRadius + Math.max(0, altitude),
+      mu: 1,
+      muSun: 1,
+      nu: 1,
+    });
+
+    // One channel is enough to drive a fade, and green sits nearest the eye's
+    // peak sensitivity.
+    return sky.radiance[1];
+  }
+
+  /** Overall bake progress in [0, 1]; 1 when there is nothing left to do. */
+  get cloudBakeProgress(): number {
+    if (this.bakes.size === 0) return 1;
+
+    let total = 0;
+    for (const runner of this.bakes.values()) total += runner.progress;
+    return total / this.bakes.size;
   }
 
   /**
@@ -104,6 +219,34 @@ export class SystemView {
   positionOf(bodyId: string): Group['position'] | null {
     return this.entries.find((e) => e.body.id === bodyId)?.view.group.position ?? null;
   }
+}
+
+/** A position in the vessel's frame, expressed in another body's frame. */
+function relativeToBody(
+  body: Body,
+  vesselBody: Body,
+  vesselPosition: Vec3,
+  time: number,
+): Vec3 {
+  const vesselAbsolute = chainToRoot(vesselBody, time).position.add(vesselPosition);
+  return vesselAbsolute.sub(chainToRoot(body, time).position);
+}
+
+/**
+ * Undo a body's rotation, so a position in its inertial frame becomes one in
+ * the frame its surface is fixed to.
+ */
+function unrotate(body: Body, position: Vec3, time: number): Vec3 {
+  const angle = -(2 * Math.PI * time) / body.rotationPeriod;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+
+  // Bodies spin about +Z, matching the force model.
+  return new Vec3(
+    position.x * cos - position.y * sin,
+    position.x * sin + position.y * cos,
+    position.z,
+  );
 }
 
 /** Trace a body's orbit around its parent as a closed line. */

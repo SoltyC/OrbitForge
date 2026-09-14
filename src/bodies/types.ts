@@ -2,6 +2,8 @@
  * Celestial body definitions. All values SI: metres, kilograms, seconds.
  */
 import type { OrbitalElements } from '../sim/orbit.js';
+import type { TerrainProfile } from '../terrain/height.js';
+import type { Vec3 } from '../sim/vec3.js';
 
 export interface AtmosphereDef {
   /** Altitude above sea level where the atmosphere ends (m). */
@@ -38,6 +40,28 @@ export interface Body {
   readonly orbit: OrbitalElements | null;
   readonly atmosphere: AtmosphereDef | null;
   readonly surface: SurfaceDef;
+  /**
+   * Height field for real terrain. Bodies without one keep the placeholder
+   * sphere, which is all an airless moon seen from orbit has needed so far.
+   */
+  readonly terrain: TerrainProfile | null;
+  /**
+   * Unit direction from the centre to the launch site.
+   *
+   * Chosen rather than assumed. With real terrain the old default of the +X
+   * axis put the pad 489 m under water.
+   *
+   * On the equator, and not merely near it. Launching nine degrees off put the
+   * vessel into an inclined orbit, and the transfer planner works in one plane
+   * — the moon simply stopped being reachable, and a mission that had taken
+   * nine hours ran for three thousand.
+   *
+   * And on the daylight side. The flattest equatorial land happened to sit at
+   * a sun angle of -0.955, so the game opened at midnight: ground, sky and sea
+   * all correctly black, which reads exactly like a renderer that has failed.
+   * This is a little rougher and lit.
+   */
+  readonly launchSite: Vec3;
 }
 
 /**

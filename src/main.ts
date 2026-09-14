@@ -22,7 +22,9 @@ import {
 } from './render/orbitLine.js';
 import { SystemView } from './render/systemView.js';
 import { attachResizeHandler, createRenderContext } from './render/renderer.js';
-import { createStarfield } from './render/starfield.js';
+import type { PointsMaterial } from 'three/webgpu';
+import { SkyPass } from './render/skyPass.js';
+import { createStarfield, starVisibility } from './render/starfield.js';
 import { createVesselView, updateVesselView } from './render/vesselView.js';
 import { createPrelaunchState } from './sim/flightState.js';
 import type { FlightState } from './sim/flightState.js';
@@ -91,6 +93,9 @@ async function main(): Promise<void> {
   let detachCamera = (): void => {};
 
   const hud = new Hud(overlay);
+
+  const skyPass = new SkyPass(context.renderer, window.innerWidth, window.innerHeight);
+  const starMaterial = stars.material as PointsMaterial;
 
   /** Rebuild flight state from a craft and swap in its mesh. */
   const loadCraft = (next: Craft): void => {
@@ -201,6 +206,11 @@ async function main(): Promise<void> {
     // Recentre the world on the vessel every frame to keep f32 precision. The
     // vessel then sits at the scene origin and the body centre lands at minus
     // its simulation position.
+    // Clouds need several seconds of noise baked before they can be drawn;
+    // this spends it a few milliseconds at a time rather than up front.
+    system.stepCloudBakes();
+    system.updateTerrain(current.body, current.position, current.time);
+
     origin.setOrigin(current.position);
 
     // Bodies are placed through the shared root frame, so this stays correct
@@ -244,8 +254,20 @@ async function main(): Promise<void> {
     // Keep the starfield centred on the camera so it never parallaxes.
     stars.position.copy(context.camera.position);
 
+    // Daylight drowns starlight rather than blocking it, so fade them by how
+    // bright the sky overhead actually is.
+    const altitude = current.position.length - current.body.radius;
+    starMaterial.opacity = starVisibility(
+      system.skyBrightnessAt(current.body, altitude),
+    );
+
     hud.update(current, phase, activeWarp);
-    context.renderer.render(context.scene, context.camera);
+
+    // Sky and clouds at reduced resolution, everything with edges at full.
+    skyPass.render(context.scene, context.camera, {
+      background: [stars, ...system.skyMeshes],
+      foreground: [vessel.group, orbit.group, ...system.surfaceMeshes],
+    });
   };
 
   const frame = (now: number): void => {
@@ -266,6 +288,10 @@ async function main(): Promise<void> {
   };
 
   requestAnimationFrame(frame);
+
+  window.addEventListener('resize', () => {
+    skyPass.setSize(window.innerWidth, window.innerHeight);
+  });
 
   window.addEventListener('beforeunload', () => {
     detachResize();

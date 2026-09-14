@@ -4,18 +4,21 @@ A rocket construction and spaceflight simulator with real orbital mechanics, in 
 browser. Think Kerbal Space Program: build a rocket, fly it, and have actual physics
 decide whether you make orbit.
 
-**Status: milestone 5 of 9.** The simulation flies a complete multi-body mission.
+**Status: milestone 7 of 9.** The simulation flies a complete multi-body mission.
 Build a rocket in the VAB, launch it, reach orbit, wait for a transfer window, burn for
 the moon, cross into its sphere of influence, and land — all under patched-conic gravity
 with analytic time-warp. Coasting vessels go *on rails*, propagating in closed form: 24
 hours and 46 revolutions warp past in 52 frames with a semi-major axis drift of 10⁻¹⁰ m.
-The sky is now physically based — Rayleigh, Mie and ozone, with a precomputed
-transmittance table — so it is blue overhead, white toward the horizon, orange at sunset,
-and a thin lit rim seen from orbit. The ground is still placeholder geometry; clouds,
-terrain and vegetation are milestones 6 through 8, sequenced in
+The sky is physically based — Rayleigh, Mie and ozone, with a precomputed transmittance
+table — so it is blue overhead, white toward the horizon, orange at sunset, and a thin lit
+rim from orbit. Above it sits a raymarched volumetric cloud layer, and below it real
+terrain: a cube-sphere quadtree over a ridged, domain-warped height field, with continents,
+coastlines and mountain ranges. Vegetation and polish are milestones 8 and 9, sequenced in
 [docs/PLAN.md](docs/PLAN.md).
 
 ![The atmosphere model: noon, sunset, and the limb from 400 km](docs/sky-reference.png)
+![The cloud model: from below at noon and at low sun, and from 9 km](docs/cloud-reference.png)
+![The height field: hemisphere, continent, and a mountain range](docs/terrain-reference.png)
 
 The reference launcher, Pathfinder I, deliberately *cannot* reach the moon — it gets an
 encounter but crashes at 1.2 km/s. Landing takes a bigger craft, which is what the editor
@@ -104,7 +107,32 @@ stacking boxes and are numerically wrong for orbits and multi-scale distances. T
 model is hand-written. A contact solver will be used later, but only for construction
 collision and crash debris.
 
-### The sky
+### Rendering what cannot be seen from here
+
+Three of the last four milestones are visual, and none of them can be checked by running
+the game in a test. So they are built the other way round: the model goes in plain
+TypeScript with no renderer attached, gets tested against physical facts rather than
+appearance, and gets rendered offline to a PNG. The shader is then a deliberate
+transcription of code already known to be right.
+
+```bash
+npx vite-node tools/renderSkyReference.ts
+npx vite-node tools/renderCloudReference.ts
+npx vite-node tools/renderTerrainReference.ts
+```
+
+It earns its keep. The sky tests caught an inverted transmittance ratio that would have
+left the atmosphere unshaded; measuring the integrator found uniform step spacing putting
+the zenith 47% below truth; the cloud reference caught a density so high that every cloud
+rendered as a black ceiling.
+
+The bugs it does *not* catch are worth knowing too. Terrain shipped with correct vertices,
+correct normals and correct precision — while wound inside out, attached to the wrong
+parent, and sampled in the wrong rotating frame. Each of those lived in the space between
+pieces that were individually right, and none of twenty-two unit tests could see them.
+The tests that now guard them compose real world matrices and ask where things ended up.
+
+## The sky
 
 One model produces the blue overhead, the whitening toward the horizon, the orange
 sunset and the lit rim from orbit — they are not four special cases. Blue scatters about
@@ -141,6 +169,8 @@ src/
   sim/      # integrators, orbits, rails, forces, attitude, guidance — no Three.js
   parts/    # catalogue, craft tree, assembler — plain data, no Three.js
   atmosphere/ # scattering model, transmittance LUT — no Three.js
+  clouds/   # noise, density field, lighting, raymarch — no Three.js
+  terrain/  # cube-sphere, height field, quadtree, chunk meshing — no Three.js
   bodies/   # celestial body definitions and ephemeris
   editor/   # the VAB: craft view, panels, click-to-place
   render/   # WebGPU renderer, floating origin, planet/vessel/stars/orbit lines
@@ -150,7 +180,7 @@ tools/      # offline renderers, e.g. the sky reference image
 docs/PLAN.md
 ```
 
-`sim/`, `parts/` and `atmosphere/` import nothing from Three.js. That is a deliberate constraint: it is
+`sim/`, `parts/`, `atmosphere/`, `clouds/` and `terrain/` import nothing from Three.js. That is a deliberate constraint: it is
 what makes the physics unit-testable without a renderer, and it is worth preserving.
 
 ## The world
@@ -172,8 +202,8 @@ there is nothing to slow a descent but the engine, so landing is flown on thrust
 3. ✅ **Part editor (VAB)** — attachment tree, radial symmetry, derived staging, live Δv/TWR
 4. ✅ **SOI transitions** — Lunara, Hohmann transfers, encounters, powered landing
 5. ✅ **Atmospheric scattering** — Rayleigh/Mie/ozone with a precomputed transmittance LUT
-6. Volumetric clouds — raymarched, weather-mapped, temporally reprojected
-7. Planetary terrain — cube-sphere quadtree LOD, GPU noise heightfields
+6. ✅ **Volumetric clouds** — raymarched, weather-mapped, baked into 3D noise volumes
+7. ✅ **Planetary terrain** — cube-sphere quadtree LOD, ridged height field, chunked meshing
 8. Vegetation and surface detail — instanced scatter with impostor LODs
 9. Polish — reentry heating, engine plumes, sound, camera work
 

@@ -3,6 +3,7 @@
  * step produces a new FlightState rather than mutating the previous one.
  */
 import type { Body } from '../bodies/types.js';
+import { groundRadiusAt } from './forces.js';
 import { Quat } from './quat.js';
 import type { RailsState } from './rails.js';
 import { Vec3 } from './vec3.js';
@@ -79,13 +80,19 @@ export function directionFromPitch(position: Vec3, pitchRadians: number): Vec3 {
   return up.scale(Math.sin(pitchRadians)).add(east.scale(Math.cos(pitchRadians))).normalized();
 }
 
-/** Create a vessel sitting on the launchpad at the equator, facing up. */
+/** Create a vessel sitting on its launchpad, facing up. */
 export function createPrelaunchState(
   body: Body,
   vessel: Vessel,
   padHeight = 0,
 ): FlightState {
-  const position = new Vec3(body.radius + padHeight, 0, 0);
+  // On the ground, not at sea level: with a height field the two differ, and
+  // starting at the planet's radius would bury the rocket in its own launch
+  // site or float it above one.
+  const direction = body.launchSite.normalized();
+  const position = direction.scale(
+    groundRadiusAt(body, direction.scale(body.radius), 0) + padHeight,
+  );
   // Sitting on the pad means co-rotating with the surface.
   const spinAxis = new Vec3(0, 0, (2 * Math.PI) / body.rotationPeriod);
   const velocity = spinAxis.cross(position);

@@ -14,9 +14,11 @@ import { orientationPointing, thrustAxis } from './flightState.js';
 import {
   altitudeOf,
   dragForce,
+  groundRadiusAt,
   gravityForce,
   surfaceRelativeVelocity,
   thrustForce,
+  verticalSpeed,
 } from './forces.js';
 import type { AscentTarget, GuidanceCommand } from './guidance.js';
 import { computeGuidance } from './guidance.js';
@@ -41,6 +43,9 @@ import {
   totalThrust,
   vesselMass,
 } from './vessel.js';
+
+/** How far above the ground a vessel can be and still count as resting on it (m). */
+const CONTACT_TOLERANCE = 0.5;
 
 /** Fixed physics timestep (s). Render framerate is decoupled from this. */
 export const PHYSICS_TIMESTEP = 1 / 50;
@@ -298,14 +303,26 @@ function resolveGroundContact(
   thrustMagnitude: number,
 ): { state: TranslationalState; regime: FlightState['regime'] } {
   const body = state.body;
-  const altitude = next.position.length - body.radius;
+  const ground = groundRadiusAt(body, next.position, state.time);
 
-  if (altitude > 0) {
+  // A little tolerance, because the ground is not a sphere any more. Travelling
+  // along a slope changes the surface height under a vessel about as fast as
+  // gravity pulls it down, so an exact test leaves a resting craft flickering
+  // between landed and falling as the terrain drops away beneath it.
+  //
+  // Anything moving upward is released regardless of how close it is. Without
+  // that the clamp is a trap: a lifting rocket is pinned and its velocity reset
+  // every step, so it never gains the height to clear the tolerance and never
+  // leaves the pad at all.
+  const clearance = next.position.length - ground;
+  const climbing = verticalSpeed(next.position, next.velocity) > 0;
+
+  if (clearance > CONTACT_TOLERANCE || (clearance > 0 && climbing)) {
     return { state: next, regime: thrustMagnitude > 0 ? 'powered' : 'coasting' };
   }
 
   // Clamp to the surface and match the ground's rotation.
-  const surfacePosition = next.position.normalized().scale(body.radius);
+  const surfacePosition = next.position.normalized().scale(ground);
   const spinAxis = new Vec3(0, 0, (2 * Math.PI) / body.rotationPeriod);
 
   return {

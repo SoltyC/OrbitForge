@@ -100,6 +100,9 @@ fn sampleTransmittance(
  * `viewPosition` is the camera relative to the planet's centre, so the maths
  * stays in the frame the lookup table was built in no matter where the
  * floating origin has placed things in render space.
+ *
+ * Returns radiance in rgb and, in alpha, how much of the background the
+ * atmosphere obscures.
  */
 export const SKY_RADIANCE_WGSL = /* wgsl */ `
 fn skyRadiance(
@@ -120,9 +123,9 @@ fn skyRadiance(
   sunIntensity: f32,
   lut: texture_2d<f32>,
   lutSize: vec2<f32>
-) -> vec3<f32> {
+) -> vec4<f32> {
   let r = length( viewPosition );
-  if ( r < 1.0 ) { return vec3<f32>( 0.0 ); }
+  if ( r < 1.0 ) { return vec4<f32>( 0.0 ); }
 
   let up = viewPosition / r;
   let mu = clamp( dot( up, viewDirection ), -1.0, 1.0 );
@@ -130,7 +133,7 @@ fn skyRadiance(
   let nu = clamp( dot( viewDirection, sunDirection ), -1.0, 1.0 );
 
   let topDisc = r * r * ( mu * mu - 1.0 ) + topRadius * topRadius;
-  if ( topDisc < 0.0 ) { return vec3<f32>( 0.0 ); }
+  if ( topDisc < 0.0 ) { return vec4<f32>( 0.0 ); }
   let topSqrt = sqrt( topDisc );
 
   // From outside the atmosphere, skip forward to where the ray enters it so
@@ -138,7 +141,7 @@ fn skyRadiance(
   var start = 0.0;
   if ( r > topRadius ) {
     let entry = -r * mu - topSqrt;
-    if ( entry < 0.0 ) { return vec3<f32>( 0.0 ); }
+    if ( entry < 0.0 ) { return vec4<f32>( 0.0 ); }
     start = entry;
   }
 
@@ -150,7 +153,7 @@ fn skyRadiance(
   }
 
   let span = end - start;
-  if ( span <= 0.0 ) { return vec3<f32>( 0.0 ); }
+  if ( span <= 0.0 ) { return vec4<f32>( 0.0 ); }
 
   let rayleighPhaseValue = ( 3.0 / ( 16.0 * 3.14159265 ) ) * ( 1.0 + nu * nu );
   let miePhaseValue = miePhaseHG( nu, miePhaseG );
@@ -208,6 +211,14 @@ fn skyRadiance(
     throughput = throughput * segmentT;
   }
 
-  return radiance * sunIntensity;
+  // Alpha is how much the atmosphere hides what is behind it. Without this
+  // the sky could only ever add light, so stars stayed visible straight
+  // through a bright daytime sky no matter how much air was in the way.
+  //
+  // A single alpha rather than per-channel loses the reddening of whatever is
+  // behind; against stars and space that is not worth a second blend source.
+  let opacity = 1.0 - dot( throughput, vec3<f32>( 1.0 / 3.0 ) );
+
+  return vec4<f32>( radiance * sunIntensity, clamp( opacity, 0.0, 1.0 ) );
 }
 `;
