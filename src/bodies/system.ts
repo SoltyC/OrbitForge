@@ -4,6 +4,8 @@
  * enough that orbits are reachable in minutes, large enough that real orbital
  * mechanics still govern everything.
  */
+import { Vec3 } from '../sim/vec3.js';
+import { DEFAULT_TERRAIN } from '../terrain/height.js';
 import type { Body } from './types.js';
 import { sphereOfInfluence } from './types.js';
 
@@ -39,6 +41,8 @@ export const TERRIN: Body = {
     seed: 20260913,
     color: 0x3a6b4f,
   },
+  terrain: DEFAULT_TERRAIN,
+  launchSite: new Vec3(-0.995045, -0.099424, 0),
 };
 
 /**
@@ -67,6 +71,10 @@ export const LUNARA: Body = {
     seed: 77010203,
     color: 0x8a8578,
   },
+  // Lunara keeps the placeholder sphere for now; a cratered profile is its own
+  // height field rather than a reuse of Terrin's.
+  terrain: null,
+  launchSite: new Vec3(1, 0, 0),
 };
 
 export const BODIES: readonly Body[] = [TERRIN, LUNARA];

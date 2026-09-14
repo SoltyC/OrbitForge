@@ -22,10 +22,18 @@ import { perlin3 } from '../clouds/noise.js';
 /**
  * Lattice period for the underlying noise.
  *
- * The noise tiles, but terrain is sampled on a sphere of unit directions
- * scaled by frequency — so a period this large never repeats within a planet.
+ * Sized against the cost of the hash table, not just against repetition. The
+ * noise caches one gradient per lattice point, so the table is the cube of this
+ * — at 256 that is nearly seventeen million entries per seed, and terrain uses
+ * a dozen seeds. It measured as hundreds of megabytes and a ten-millisecond
+ * stall on the first chunk built.
+ *
+ * At 64 the table is a quarter of a megabyte. The continent octaves never
+ * reach that far — their coordinates stay inside about +/-31 — so the shapes
+ * that matter do not repeat. The finest mountain octaves do wrap, at a sixth
+ * of a percent of the total amplitude, which is not a thing anyone can see.
  */
-const NOISE_PERIOD = 256;
+const NOISE_PERIOD = 64;
 
 export interface TerrainProfile {
   /** Vertical scale of the continental rise, sea level to plateau (m). */

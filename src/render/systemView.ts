@@ -19,7 +19,7 @@ import { BODIES, parentOf } from '../bodies/system.js';
 import type { Object3D } from 'three/webgpu';
 import type { Body } from '../bodies/types.js';
 import { stateFromElements } from '../sim/orbit.js';
-import type { Vec3 } from '../sim/vec3.js';
+import { Vec3 } from '../sim/vec3.js';
 import { createAtmosphereModel } from '../atmosphere/model.js';
 import type { AtmosphereModel } from '../atmosphere/model.js';
 import { integrateScattering } from '../atmosphere/scattering.js';
@@ -90,6 +90,33 @@ export class SystemView {
   }
 
   /**
+   * Keep terrain in step with the camera and spend a little time building it.
+   *
+   * The camera is given in the vessel's frame, so it is converted into each
+   * body's own rotating frame first — chunks are fixed to the ground, and a
+   * camera position that ignored the planet's spin would drag the level of
+   * detail around the surface as the day went on.
+   */
+  updateTerrain(vesselBody: Body, vesselPosition: Vec3, time: number): void {
+    for (const entry of this.entries) {
+      const terrain = entry.view.terrain;
+      if (!terrain) continue;
+
+      const relative = relativeToBody(entry.body, vesselBody, vesselPosition, time);
+      terrain.update(unrotate(entry.body, relative, time));
+      terrain.step();
+    }
+  }
+
+  /** Chunks still queued across every body, for reporting progress. */
+  get pendingChunks(): number {
+    return this.entries.reduce(
+      (total, entry) => total + (entry.view.terrain?.pending ?? 0),
+      0,
+    );
+  }
+
+  /**
    * The atmosphere shells, which draw in the reduced-resolution sky pass.
    * Smooth gradients, so they lose nothing to it.
    */
@@ -102,9 +129,12 @@ export class SystemView {
    * because they have edges worth resolving.
    */
   get surfaceMeshes(): Object3D[] {
-    return this.entries.flatMap((entry) =>
-      entry.orbitLine ? [entry.view.surface, entry.orbitLine] : [entry.view.surface],
-    );
+    return this.entries.flatMap((entry) => {
+      const objects: Object3D[] = [entry.view.surface];
+      if (entry.view.terrain) objects.push(entry.view.terrain.group);
+      if (entry.orbitLine) objects.push(entry.orbitLine);
+      return objects;
+    });
   }
 
   /**
@@ -189,6 +219,34 @@ export class SystemView {
   positionOf(bodyId: string): Group['position'] | null {
     return this.entries.find((e) => e.body.id === bodyId)?.view.group.position ?? null;
   }
+}
+
+/** A position in the vessel's frame, expressed in another body's frame. */
+function relativeToBody(
+  body: Body,
+  vesselBody: Body,
+  vesselPosition: Vec3,
+  time: number,
+): Vec3 {
+  const vesselAbsolute = chainToRoot(vesselBody, time).position.add(vesselPosition);
+  return vesselAbsolute.sub(chainToRoot(body, time).position);
+}
+
+/**
+ * Undo a body's rotation, so a position in its inertial frame becomes one in
+ * the frame its surface is fixed to.
+ */
+function unrotate(body: Body, position: Vec3, time: number): Vec3 {
+  const angle = -(2 * Math.PI * time) / body.rotationPeriod;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+
+  // Bodies spin about +Z, matching the force model.
+  return new Vec3(
+    position.x * cos - position.y * sin,
+    position.x * sin + position.y * cos,
+    position.z,
+  );
 }
 
 /** Trace a body's orbit around its parent as a closed line. */

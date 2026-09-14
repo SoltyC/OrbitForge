@@ -8,6 +8,11 @@
  * of those is asserted directly rather than left to the eye.
  */
 import { describe, expect, it } from 'vitest';
+import { LUNARA, TERRIN } from '../src/bodies/system.js';
+import { createPathfinder } from '../src/parts/testVehicle.js';
+import { createPrelaunchState } from '../src/sim/flightState.js';
+import { groundRadiusAt } from '../src/sim/forces.js';
+import { step } from '../src/sim/simulation.js';
 import { Vec3 } from '../src/sim/vec3.js';
 import {
   FACE_COUNT,
@@ -383,5 +388,87 @@ describe('chunk selection', () => {
     const b = selectChunks({ planetRadius: PLANET_RADIUS, camera: surface, maxDepth: 7 });
 
     expect(a.map(chunkKey)).toEqual(b.map(chunkKey));
+  });
+});
+
+describe('launch site', () => {
+  it('sits on land, not under water', () => {
+    // The default +X axis put the pad 489 m below sea level once the height
+    // field existed, which is the kind of thing only a test notices.
+    expect(elevationAt(TERRIN.launchSite.normalized())).toBeGreaterThan(0);
+  });
+
+  it('is on the equator, so orbits stay in Lunara’s plane', () => {
+    // The transfer planner works in a single plane. Launching nine degrees off
+    // put the vessel into an inclined orbit and the moon stopped being
+    // reachable at all — a nine-hour mission ran for three thousand.
+    expect(Math.abs(TERRIN.launchSite.normalized().z)).toBeLessThan(1e-6);
+  });
+
+  it('is flat enough to stand a rocket on', () => {
+    const direction = TERRIN.launchSite.normalized();
+    const across = 0.0033; // roughly two kilometres
+
+    const north = new Vec3(0, 0, 1);
+    const east = direction.cross(north).normalized();
+
+    const around = [north, east, north.negate(), east.negate()].map((tangent) =>
+      elevationAt(direction.add(tangent.scale(across)).normalized()),
+    );
+
+    expect(Math.max(...around) - Math.min(...around)).toBeLessThan(60);
+  });
+
+  it('places a new vessel on the ground rather than at sea level', () => {
+    const state = createPrelaunchState(TERRIN, createPathfinder());
+    const ground = groundRadiusAt(TERRIN, state.position);
+
+    expect(state.position.length).toBeCloseTo(ground, 3);
+    expect(state.position.length).toBeGreaterThan(TERRIN.radius);
+  });
+});
+
+describe('ground contact over terrain', () => {
+  const OPTIONS = {
+    target: { orbitRadius: TERRIN.radius + 80_000 },
+    autopilotEnabled: true,
+  };
+
+  it('lets a rocket leave the pad', () => {
+    // The clamp that keeps a resting craft on a slope is a trap if it also
+    // holds down anything climbing: the vessel is pinned and its velocity
+    // reset every step, and it never leaves at all.
+    let state = createPrelaunchState(TERRIN, createPathfinder());
+    const startRadius = state.position.length;
+
+    for (let i = 0; i < 250; i++) state = step(state, OPTIONS).state;
+
+    expect(state.position.length).toBeGreaterThan(startRadius + 10);
+    expect(state.regime).toBe('powered');
+  });
+
+  it('keeps an engineless craft resting on sloping ground', () => {
+    const craft = { ...createPathfinder(), stages: [createPathfinder().stages[2]!] };
+    let state = createPrelaunchState(TERRIN, craft);
+
+    for (let i = 0; i < 50; i++) state = step(state, OPTIONS).state;
+
+    expect(state.regime).toBe('landed');
+    expect(state.position.length).toBeCloseTo(
+      groundRadiusAt(TERRIN, state.position),
+      1,
+    );
+  });
+
+  it('skips the height field well above the tallest ground', () => {
+    // Terrain must stay out of the physics loop except where it can matter.
+    const high = new Vec3(TERRIN.radius + 500_000, 0, 0);
+    expect(groundRadiusAt(TERRIN, high)).toBe(TERRIN.radius);
+  });
+
+  it('reports sea level for a body with no height field', () => {
+    expect(groundRadiusAt(LUNARA, new Vec3(LUNARA.radius + 10, 0, 0))).toBe(
+      LUNARA.radius,
+    );
   });
 });

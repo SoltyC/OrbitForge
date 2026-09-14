@@ -209,6 +209,7 @@ async function main(): Promise<void> {
     // Clouds need several seconds of noise baked before they can be drawn;
     // this spends it a few milliseconds at a time rather than up front.
     system.stepCloudBakes();
+    system.updateTerrain(current.body, current.position, current.time);
 
     origin.setOrigin(current.position);
 

@@ -6,6 +6,7 @@
  * ever feels the gravity of its current sphere-of-influence owner.
  */
 import type { Body } from '../bodies/types.js';
+import { terrainRadius } from '../terrain/height.js';
 import { densityAt } from './atmosphere.js';
 import { Vec3 } from './vec3.js';
 
@@ -69,6 +70,24 @@ export function thrustForce(direction: Vec3, magnitude: number): Vec3 {
 /** Altitude above sea level (m). */
 export function altitudeOf(body: Body, position: Vec3): number {
   return position.length - body.radius;
+}
+
+/**
+ * Radius of the solid surface beneath a position (m).
+ *
+ * Sea level for a body without a height field, and for anything above the
+ * highest ground that field can produce — which keeps the terrain out of the
+ * physics loop for all but the last few kilometres of a flight, where it is
+ * the only place it can matter.
+ */
+export function groundRadiusAt(body: Body, position: Vec3): number {
+  const profile = body.terrain;
+  if (!profile) return body.radius;
+
+  const ceiling = body.radius + profile.continentAmplitude + profile.mountainAmplitude;
+  if (position.length > ceiling) return body.radius;
+
+  return terrainRadius(body.radius, position.normalized(), profile);
 }
 
 /** Speed relative to the rotating surface — what a pitot tube would read. */
