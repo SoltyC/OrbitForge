@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { TERRIN } from '../src/bodies/system.js';
+import { starVisibility } from '../src/render/starfield.js';
 import {
   distanceToGround,
   distanceToTop,
@@ -432,3 +433,50 @@ function integratePhase(phase: (cosTheta: number) => number): number {
 
 /** Keep the model type referenced for readers of this file. */
 export type { AtmosphereModel };
+
+describe('star visibility', () => {
+  /** Sky radiance overhead, the quantity the star fade is driven by. */
+  function zenith(altitude: number, muSun: number): number {
+    return integrateScattering(model, lut, {
+      r: GROUND + altitude,
+      mu: 1,
+      muSun,
+      nu: muSun,
+    }).radiance[1]!;
+  }
+
+  it('drowns stars in a daytime sky', () => {
+    // Daylight does not block starlight, it outshines it. Attenuation alone
+    // left stars visible wherever the air happened to be thin.
+    expect(starVisibility(zenith(0, 1))).toBeLessThan(0.05);
+  });
+
+  it('still hides them in the blue sky partway up', () => {
+    expect(starVisibility(zenith(7_000, 1))).toBeLessThan(0.15);
+  });
+
+  it('brings them back above the atmosphere', () => {
+    expect(starVisibility(zenith(40_000, 1))).toBeGreaterThan(0.9);
+    expect(starVisibility(zenith(80_000, 1))).toBeGreaterThan(0.95);
+  });
+
+  it('shows them at night on the ground', () => {
+    expect(starVisibility(zenith(0, -0.5))).toBeGreaterThan(0.95);
+  });
+
+  it('falls monotonically as the sky brightens', () => {
+    let previous = Infinity;
+    for (const brightness of [0, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1]) {
+      const value = starVisibility(brightness);
+      expect(value).toBeLessThanOrEqual(previous);
+      previous = value;
+    }
+  });
+
+  it('stays within [0, 1]', () => {
+    for (const brightness of [-1, 0, 0.5, 1e6]) {
+      expect(starVisibility(brightness)).toBeGreaterThanOrEqual(0);
+      expect(starVisibility(brightness)).toBeLessThanOrEqual(1);
+    }
+  });
+});

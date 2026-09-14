@@ -16,9 +16,15 @@ import {
 } from 'three/webgpu';
 import { chainToRoot } from '../bodies/ephemeris.js';
 import { BODIES, parentOf } from '../bodies/system.js';
+import type { Object3D } from 'three/webgpu';
 import type { Body } from '../bodies/types.js';
 import { stateFromElements } from '../sim/orbit.js';
 import type { Vec3 } from '../sim/vec3.js';
+import { createAtmosphereModel } from '../atmosphere/model.js';
+import type { AtmosphereModel } from '../atmosphere/model.js';
+import { integrateScattering } from '../atmosphere/scattering.js';
+import { buildTransmittanceLut } from '../atmosphere/transmittance.js';
+import type { TransmittanceLut } from '../atmosphere/transmittance.js';
 import { DEFAULT_CLOUD_LAYER } from '../clouds/density.js';
 import { CloudBakeRunner } from './clouds/cloudBakeRunner.js';
 import { uploadCloudTextures } from './clouds/cloudTextureUpload.js';
@@ -35,6 +41,9 @@ interface BodyEntry {
   readonly parent: Body | null;
   readonly view: PlanetView;
   readonly orbitLine: LineLoop | null;
+  /** Present only for bodies with an atmosphere, for sky-brightness queries. */
+  readonly model: AtmosphereModel | null;
+  readonly lut: TransmittanceLut | null;
 }
 
 export class SystemView {
@@ -50,10 +59,15 @@ export class SystemView {
       const view = createPlanetView(body);
       const orbitLine = parent ? buildBodyOrbit(body, parent) : null;
 
+      // The same model the shader uses, kept on the CPU so the renderer can
+      // ask how bright the sky is without reading back from the GPU.
+      const model = createAtmosphereModel(body);
+      const lut = model ? buildTransmittanceLut(model) : null;
+
       this.group.add(view.group);
       if (orbitLine) this.group.add(orbitLine);
 
-      this.entries.push({ body, parent, view, orbitLine });
+      this.entries.push({ body, parent, view, orbitLine, model, lut });
 
       // Bodies with a sky get clouds, once their noise has finished baking.
       if (view.sky) this.bakes.set(body.id, new CloudBakeRunner(DEFAULT_CLOUD_LAYER.seed));
@@ -73,6 +87,46 @@ export class SystemView {
       entry?.view.sky?.setCloudTextures(uploadCloudTextures(baked));
       this.bakes.delete(bodyId);
     }
+  }
+
+  /**
+   * The atmosphere shells, which draw in the reduced-resolution sky pass.
+   * Smooth gradients, so they lose nothing to it.
+   */
+  get skyMeshes(): Object3D[] {
+    return this.entries.flatMap((entry) => (entry.view.sky ? [entry.view.sky.mesh] : []));
+  }
+
+  /**
+   * The solid bodies and their orbit lines, which draw at full resolution
+   * because they have edges worth resolving.
+   */
+  get surfaceMeshes(): Object3D[] {
+    return this.entries.flatMap((entry) =>
+      entry.orbitLine ? [entry.view.surface, entry.orbitLine] : [entry.view.surface],
+    );
+  }
+
+  /**
+   * Sky brightness overhead at a viewpoint, in the atmosphere model's units.
+   * Used to decide how far to fade the stars; zero for an airless body.
+   */
+  skyBrightnessAt(body: Body, altitude: number): number {
+    const entry = this.entries.find((candidate) => candidate.body.id === body.id);
+    const model = entry?.model;
+    const lut = entry?.lut;
+    if (!model || !lut) return 0;
+
+    const sky = integrateScattering(model, lut, {
+      r: model.bottomRadius + Math.max(0, altitude),
+      mu: 1,
+      muSun: 1,
+      nu: 1,
+    });
+
+    // One channel is enough to drive a fade, and green sits nearest the eye's
+    // peak sensitivity.
+    return sky.radiance[1];
   }
 
   /** Overall bake progress in [0, 1]; 1 when there is nothing left to do. */
