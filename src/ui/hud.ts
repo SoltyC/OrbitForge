@@ -14,10 +14,17 @@ import {
 } from '../sim/forces.js';
 import type { AscentPhase } from '../sim/guidance.js';
 import { elementsFromState, timeToApoapsis, timeToPeriapsis } from '../sim/orbit.js';
+import { holdLabel } from '../sim/control.js';
+import type { HoldMode } from '../sim/control.js';
+import { isEmpty, nodeDeltaV } from '../sim/maneuver.js';
+import type { ManeuverNode } from '../sim/maneuver.js';
 import { formatWarp } from '../sim/timeWarp.js';
 import { thrustToWeight, totalDeltaV, vesselMass } from '../sim/vessel.js';
 
 const FIELDS = [
+  'control',
+  'hold',
+  'throttleLevel',
   'phase',
   'body',
   'regime',
@@ -40,11 +47,16 @@ const FIELDS = [
   'mass',
   'skinTemp',
   'heatShield',
+  'nodeDeltaV',
+  'nodeIn',
 ] as const;
 
 type FieldName = (typeof FIELDS)[number];
 
 const LABELS: Record<FieldName, string> = {
+  control: 'Control',
+  hold: 'Holding',
+  throttleLevel: 'Throttle',
   phase: 'Phase',
   body: 'Reference body',
   regime: 'Regime',
@@ -67,7 +79,17 @@ const LABELS: Record<FieldName, string> = {
   mass: 'Mass',
   skinTemp: 'Skin temp',
   heatShield: 'Heat shield',
+  nodeDeltaV: 'Node delta-v',
+  nodeIn: 'Node in',
 };
+
+/** What the player is doing, as opposed to what the vessel is doing. */
+export interface PilotStatus {
+  readonly hold: HoldMode;
+  readonly throttle: number;
+  readonly autopilot: boolean;
+  readonly maneuver: ManeuverNode | null;
+}
 
 export class Hud {
   private readonly values = new Map<FieldName, HTMLElement>();
@@ -102,7 +124,12 @@ export class Hud {
     this.panel.style.display = visible ? '' : 'none';
   }
 
-  update(state: FlightState, phase: AscentPhase, warpIndex: number): void {
+  update(
+    state: FlightState,
+    phase: AscentPhase,
+    warpIndex: number,
+    pilot: PilotStatus,
+  ): void {
     const body = state.body;
     const altitude = altitudeOf(body, state.position);
     const elements = elementsFromState(state.position, state.velocity, body.mu);
@@ -110,6 +137,18 @@ export class Hud {
     const ambient = pressureRatio(body, altitude);
     const gravity = body.mu / (state.position.length * state.position.length);
     const stage = state.vessel.stages[0];
+
+    this.set('control', pilot.autopilot ? 'Autopilot' : 'Manual');
+    this.set('hold', holdLabel(pilot.hold));
+    this.set('throttleLevel', `${(pilot.throttle * 100).toFixed(0)}%`);
+
+    if (pilot.maneuver && !isEmpty(pilot.maneuver)) {
+      this.set('nodeDeltaV', `${nodeDeltaV(pilot.maneuver).toFixed(0)} m/s`);
+      this.set('nodeIn', formatDuration(pilot.maneuver.time - state.time, false));
+    } else {
+      this.set('nodeDeltaV', '—');
+      this.set('nodeIn', '—');
+    }
 
     this.set('phase', formatPhase(phase));
     this.set('body', body.name);
@@ -153,6 +192,7 @@ function formatPhase(phase: AscentPhase): string {
     arrived: 'Arrived',
     descent: 'Powered descent',
     touchdown: 'Touchdown',
+    manual: 'Manual',
     complete: 'Orbit achieved',
   };
   return names[phase];

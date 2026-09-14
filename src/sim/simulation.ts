@@ -30,7 +30,11 @@ import {
   maxSafeRailsTimestep,
   railsToCartesian,
 } from './rails.js';
+import { NEUTRAL_CONTROL, manualDirection } from './control.js';
+import type { ControlInput } from './control.js';
 import { heatingConditions, stepHeating } from './heating.js';
+import { evaluateNode, isEmpty } from './maneuver.js';
+import type { ManeuverNode } from './maneuver.js';
 import { resolveSoi } from './soi.js';
 import type { Body } from '../bodies/types.js';
 import type { TranslationalState } from './integrator.js';
@@ -56,6 +60,16 @@ export interface SimulationOptions {
   readonly autopilotEnabled: boolean;
   /** When set, the autopilot transfers to this body after reaching orbit. */
   readonly transferTo?: Body | null;
+  /**
+   * The player's own input. Used whenever the autopilot is off, which is the
+   * default — the autopilot exists to demonstrate a flight, not to fly it for
+   * someone who wants to.
+   */
+  readonly control?: ControlInput;
+  /** Planned burn, if the player has one and is holding for it. */
+  readonly maneuver?: ManeuverNode | null;
+  /** Direction the vessel was last told to point, for continuity in free flight. */
+  readonly commandedDirection?: Vec3 | null;
 }
 
 export interface StepResult {
@@ -77,12 +91,9 @@ export function step(
   options: SimulationOptions,
   dt: number = PHYSICS_TIMESTEP,
 ): StepResult {
-  const command = computeGuidance(
-    state,
-    options.target,
-    options.autopilotEnabled,
-    options.transferTo ?? null,
-  );
+  const command = options.autopilotEnabled
+    ? computeGuidance(state, options.target, true, options.transferTo ?? null)
+    : playerCommand(state, options, dt);
 
   // Drop a spent stage before computing this step's forces.
   const staged = command.shouldStage
@@ -99,6 +110,40 @@ export function step(
   }
 
   return applySoi(stepIntegrated(staged, command, Math.min(cappedDt, PHYSICS_TIMESTEP)));
+}
+
+/**
+ * Turn the player's input into the same command shape the autopilot produces,
+ * so nothing downstream has to know which flew the vehicle.
+ */
+function playerCommand(
+  state: FlightState,
+  options: SimulationOptions,
+  dt: number,
+): GuidanceCommand {
+  const input = options.control ?? NEUTRAL_CONTROL;
+
+  const node = options.maneuver ?? null;
+  const burn =
+    node && !isEmpty(node)
+      ? (evaluateNode(node, state.position, state.velocity, state.body.mu, state.time)
+          ?.burn ?? null)
+      : null;
+
+  const direction = manualDirection(
+    state,
+    input,
+    options.commandedDirection ?? Vec3.ZERO,
+    burn,
+    dt,
+  );
+
+  return {
+    phase: 'manual',
+    targetDirection: direction,
+    throttle: input.throttle,
+    shouldStage: input.stageRequested,
+  };
 }
 
 /**

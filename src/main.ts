@@ -18,6 +18,7 @@ import {
   orbitSignature,
   updateMarkerScale,
   updateOrbitGeometry,
+  updatePlannedOrbit,
   updateVesselMarker,
 } from './render/orbitLine.js';
 import { SystemView } from './render/systemView.js';
@@ -39,7 +40,20 @@ import {
   requiresRails,
   warpFactorAt,
 } from './sim/timeWarp.js';
+import type { ControlInput } from './sim/control.js';
+import {
+  adjustNode,
+  circulariseAtApoapsis,
+  emptyNode,
+  evaluateNode,
+  isEmpty,
+  isExpired,
+  shiftNode,
+} from './sim/maneuver.js';
+import type { ManeuverNode } from './sim/maneuver.js';
+import { Vec3 } from './sim/vec3.js';
 import { Hud } from './ui/hud.js';
+import { PilotInput } from './ui/pilotInput.js';
 
 /** Target a circular orbit 80 km up — comfortably clear of the atmosphere. */
 const TARGET_ALTITUDE = 80_000;
@@ -64,17 +78,25 @@ async function main(): Promise<void> {
   const context = await createRenderContext(canvas);
   const detachResize = attachResizeHandler(context);
 
-  const options: SimulationOptions = {
+  // Manual by default: the autopilot is a demonstration, not the game.
+  let autopilotEnabled = false;
+
+  const optionsFor = (control: ControlInput): SimulationOptions => ({
     target: { orbitRadius: TERRIN.radius + TARGET_ALTITUDE },
-    autopilotEnabled: true,
-    transferTo: LUNARA,
-  };
+    autopilotEnabled,
+    transferTo: autopilotEnabled ? LUNARA : null,
+    control,
+    maneuver,
+    commandedDirection,
+  });
 
   let craft: Craft = createPathfinderCraft();
   let state = createPrelaunchState(TERRIN, craftToVessel(craft));
   let phase: AscentPhase = 'prelaunch';
   let appMode: AppMode = 'editor';
   let requestedWarp = 0;
+  let maneuver: ManeuverNode | null = null;
+  let commandedDirection: Vec3 | null = null;
   let activeWarp = 0;
   let isPaused = false;
   let viewMode: ViewMode = 'flight';
@@ -95,6 +117,46 @@ async function main(): Promise<void> {
   const hud = new Hud(overlay);
 
   const skyPass = new SkyPass(context.renderer, window.innerWidth, window.innerHeight);
+
+  const pilot = new PilotInput({
+    onToggleAutopilot: () => {
+      autopilotEnabled = !autopilotEnabled;
+    },
+    onManeuver: (action) => {
+      switch (action.kind) {
+        case 'plan':
+          // Offer the manoeuvre almost everyone wants first.
+          maneuver =
+            circulariseAtApoapsis(state.position, state.velocity, state.body.mu, state.time) ??
+            emptyNode(state.time + 60);
+          pilot.setHold('maneuver');
+          break;
+
+        case 'clear':
+          maneuver = null;
+          if (pilot.holdMode === 'maneuver') pilot.setHold('free');
+          break;
+
+        case 'adjust':
+          if (maneuver) maneuver = adjustNode(maneuver, action.axis, action.delta);
+          break;
+
+        case 'shift':
+          if (maneuver) maneuver = shiftNode(maneuver, action.seconds, state.time);
+          break;
+
+        case 'warpTo':
+          // Jump the wait, not the burn: stop short of the node so the player
+          // still flies it.
+          if (maneuver) {
+            const lead = Math.max(0, maneuver.time - state.time - 20);
+            if (lead > 0) requestedWarp = clampIndex(requestedWarp + 2);
+          }
+          break;
+      }
+    },
+  });
+  const detachPilot = pilot.attach();
   const starMaterial = stars.material as PointsMaterial;
 
   /** Rebuild flight state from a craft and swap in its mesh. */
@@ -175,6 +237,13 @@ async function main(): Promise<void> {
   let accumulator = 0;
 
   const advanceSimulation = (elapsed: number): void => {
+    const control = pilot.sample(elapsed);
+    const options = optionsFor(control);
+
+    // Time warp is for coasting. Under thrust it would integrate a burn in
+    // leaps and put the vessel somewhere it never flew.
+    if (control.throttle > 0 && !autopilotEnabled) requestedWarp = 0;
+
     activeWarp = permittedWarpIndex(state, requestedWarp);
     const factor = warpFactorAt(activeWarp);
 
@@ -183,6 +252,7 @@ async function main(): Promise<void> {
       const result = step(state, options, elapsed * factor);
       state = result.state;
       phase = result.command.phase;
+      commandedDirection = result.command.targetDirection;
       accumulator = 0;
       return;
     }
@@ -194,8 +264,15 @@ async function main(): Promise<void> {
       const result = step(state, options, PHYSICS_TIMESTEP);
       state = result.state;
       phase = result.command.phase;
+      commandedDirection = result.command.targetDirection;
       accumulator -= result.advanced;
       steps += 1;
+
+      // Drop a node once it has been flown, so the hold releases by itself.
+      if (maneuver && isExpired(maneuver, state.time, 30)) {
+        maneuver = null;
+        if (pilot.holdMode === 'maneuver') pilot.setHold('free');
+      }
     }
 
     // Drop any backlog we could not work through, rather than accruing debt.
@@ -238,6 +315,19 @@ async function main(): Promise<void> {
     }
     updateVesselMarker(orbit, elements, current.body.mu);
 
+    // The orbit a planned burn would produce, drawn beside the current one.
+    const planned =
+      maneuver && !isEmpty(maneuver)
+        ? evaluateNode(maneuver, current.position, current.velocity, current.body.mu, current.time)
+        : null;
+
+    updatePlannedOrbit(
+      orbit,
+      planned?.resulting ?? null,
+      planned?.position ?? null,
+      current.body.mu,
+    );
+
     if (viewMode === 'flight') {
       const altitude = Math.max(0, altitudeOf(current.body, current.position));
       chase.setDistance(60 + altitude * 0.01);
@@ -261,7 +351,12 @@ async function main(): Promise<void> {
       system.skyBrightnessAt(current.body, altitude),
     );
 
-    hud.update(current, phase, activeWarp);
+    hud.update(current, phase, activeWarp, {
+      hold: pilot.holdMode,
+      throttle: pilot.throttleLevel,
+      autopilot: autopilotEnabled,
+      maneuver,
+    });
 
     // Sky and clouds at reduced resolution, everything with edges at full.
     skyPass.render(context.scene, context.camera, {
@@ -297,6 +392,7 @@ async function main(): Promise<void> {
     detachResize();
     detachCamera();
     detachEditor();
+    detachPilot();
     detachKeys();
   });
 }
@@ -313,8 +409,8 @@ interface KeyboardHandlers {
 function attachKeyboard(handlers: KeyboardHandlers): () => void {
   const onKeyDown = (event: KeyboardEvent): void => {
     switch (event.key) {
-      case ' ':
-        event.preventDefault();
+      case 'p':
+      case 'P':
         handlers.onTogglePause();
         break;
       case ',':

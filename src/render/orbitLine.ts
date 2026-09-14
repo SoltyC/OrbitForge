@@ -19,12 +19,15 @@ import {
   SphereGeometry,
 } from 'three/webgpu';
 import { stateFromElements } from '../sim/orbit.js';
+import type { Vec3 } from '../sim/vec3.js';
 import type { OrbitSummary } from '../sim/orbit.js';
 
 /** Vertices around the ellipse. 256 is smooth at any practical zoom. */
 const SEGMENTS = 256;
 
 const ORBIT_COLOR = 0x5ad1ff;
+/** The orbit a planned burn would produce, shown alongside the current one. */
+const PLANNED_COLOR = 0xffd24a;
 const APOAPSIS_COLOR = 0x6fffa8;
 const PERIAPSIS_COLOR = 0xffb45a;
 const VESSEL_COLOR = 0xffffff;
@@ -35,6 +38,10 @@ export interface OrbitLineView {
   readonly apoapsisMarker: Mesh;
   readonly periapsisMarker: Mesh;
   readonly vesselMarker: Mesh;
+  /** The orbit a planned manoeuvre would produce. */
+  readonly plannedLine: Line;
+  /** Where along the current orbit the burn happens. */
+  readonly nodeMarker: Mesh;
 }
 
 export function createOrbitLineView(): OrbitLineView {
@@ -58,9 +65,74 @@ export function createOrbitLineView(): OrbitLineView {
   const periapsisMarker = createMarker(PERIAPSIS_COLOR, 'periapsis');
   const vesselMarker = createMarker(VESSEL_COLOR, 'vesselMarker');
 
-  group.add(line, apoapsisMarker, periapsisMarker, vesselMarker);
+  // The planned orbit, drawn dashed-bright against the current one so the
+  // difference between them is the whole readable content of the map.
+  const plannedGeometry = new BufferGeometry();
+  plannedGeometry.setAttribute(
+    'position',
+    new BufferAttribute(new Float32Array(SEGMENTS * 3), 3),
+  );
 
-  return { group, line, apoapsisMarker, periapsisMarker, vesselMarker };
+  const plannedLine = new LineLoop(
+    plannedGeometry,
+    new LineBasicMaterial({ color: PLANNED_COLOR, transparent: true, opacity: 0.9 }),
+  );
+  plannedLine.name = 'plannedOrbit';
+  plannedLine.frustumCulled = false;
+  plannedLine.visible = false;
+
+  const nodeMarker = createMarker(PLANNED_COLOR, 'maneuverNode');
+  nodeMarker.visible = false;
+
+  group.add(line, plannedLine, apoapsisMarker, periapsisMarker, vesselMarker, nodeMarker);
+
+  return {
+    group,
+    line,
+    apoapsisMarker,
+    periapsisMarker,
+    vesselMarker,
+    plannedLine,
+    nodeMarker,
+  };
+}
+
+/**
+ * Show the orbit a planned burn would produce, and where it happens.
+ *
+ * Pass null to hide it. Seeing the resulting orbit before spending any
+ * propellant is the entire point of planning a manoeuvre rather than guessing.
+ */
+export function updatePlannedOrbit(
+  view: OrbitLineView,
+  planned: OrbitSummary | null,
+  nodePosition: Vec3 | null,
+  mu: number,
+): void {
+  const show = planned !== null && planned.isClosed;
+
+  view.plannedLine.visible = show;
+  view.nodeMarker.visible = nodePosition !== null;
+
+  if (nodePosition) {
+    view.nodeMarker.position.set(nodePosition.x, nodePosition.y, nodePosition.z);
+  }
+
+  if (!show) return;
+
+  const positions = view.plannedLine.geometry.getAttribute('position') as BufferAttribute;
+  const array = positions.array as Float32Array;
+
+  for (let i = 0; i < SEGMENTS; i++) {
+    const trueAnomaly = (i / SEGMENTS) * Math.PI * 2;
+    const { position } = stateFromElements({ ...planned, trueAnomaly }, mu);
+
+    array[i * 3] = position.x;
+    array[i * 3 + 1] = position.y;
+    array[i * 3 + 2] = position.z;
+  }
+
+  positions.needsUpdate = true;
 }
 
 function createMarker(color: number, name: string): Mesh {
@@ -136,6 +208,7 @@ export function updateMarkerScale(view: OrbitLineView, cameraDistance: number): 
   view.apoapsisMarker.scale.setScalar(scale);
   view.periapsisMarker.scale.setScalar(scale);
   view.vesselMarker.scale.setScalar(scale);
+  view.nodeMarker.scale.setScalar(scale * 1.3);
 }
 
 /** A compact signature of an orbit's shape, used to skip redundant rebuilds. */

@@ -47,19 +47,31 @@ automatically.
 ### Controls
 
 The game opens in the VAB. Pick a part, click a blue attach node to place it, then
-**Launch**.
+**Launch**. You fly it yourself — the autopilot is a demonstration, on `T`.
+
+Bindings follow Kerbal Space Program's, because that is the muscle memory anyone
+arriving here already has.
 
 | Input | Action |
 |---|---|
-| Click part → click node | Place a part |
-| Click a placed part | Select it |
-| Delete / Backspace | Remove the selected part and everything below it |
-| Drag / Wheel | Orbit / zoom camera |
-| Space | Pause |
+| `W` `S` `A` `D` `Q` `E` | Pitch, yaw, roll |
+| `Shift` / `Ctrl` | Throttle up / down |
+| `Z` / `X` | Full throttle / cut |
+| `Space` | Stage |
+| `1`–`8` | Hold: free, prograde, retrograde, normal, anti-normal, radial out/in, node |
+| `N` | Plan a manoeuvre node (offers a circularisation) |
+| `=` / `-` | Node prograde ± |
+| `.` / `,` | Node normal ± |
+| `;` / `'` | Node radial ± |
+| `[` / `]` | Move the node in time |
+| `C` | Clear the node |
+| `M` | Map view — the planned orbit is drawn in gold beside the current one |
 | `,` / `.` | Time warp down / up |
-| `M` | Toggle map view |
-| `B` | Back to the VAB |
-| `R` | Reset to launchpad |
+| `P` | Pause |
+| `T` | Hand over to the autopilot |
+| `B` / `R` | Back to the VAB / reset |
+
+In the VAB: click a part, click a blue node to place it, `Delete` removes.
 
 ## How it works
 
@@ -163,6 +175,7 @@ ground truth the game is supposed to match.
 | Mie phase | Henyey-Greenstein, `g = 0.8` |
 | Reentry heating | Sutton-Graves, `q = k·√(ρ/R)·v³` |
 | Radiative cooling | Stefan-Boltzmann, `σεT⁴` |
+| Manoeuvre node | Δv in the prograde/normal/radial frame, applied at a future true anomaly |
 
 ## Layout
 

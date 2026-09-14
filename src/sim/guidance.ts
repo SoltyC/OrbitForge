@@ -57,7 +57,8 @@ export type AscentPhase =
   | 'cruise'
   | 'arrived'
   | 'descent'
-  | 'touchdown';
+  | 'touchdown'
+  | 'manual';
 
 export interface GuidanceCommand {
   readonly phase: AscentPhase;
