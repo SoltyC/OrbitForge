@@ -278,3 +278,57 @@ describe('surface colour', () => {
     }
   });
 });
+
+describe('triangle winding', () => {
+  it('winds every surface triangle to face outward', () => {
+    // Wound the other way the entire surface is back-face culled: the view
+    // passes straight through the ground to whatever is behind it, while the
+    // vertex normals stay perfectly correct so nothing else looks wrong.
+    const chunk = chunkAt(3, 0, 4, 4);
+    const geometry = buildChunkGeometry(chunk, PLANET_RADIUS);
+
+    const vertex = (i: number): Vec3 =>
+      new Vec3(
+        geometry.positions[i * 3]!,
+        geometry.positions[i * 3 + 1]!,
+        geometry.positions[i * 3 + 2]!,
+      ).add(geometry.centre);
+
+    const gridTriangles = (CHUNK_RESOLUTION - 1) ** 2 * 2;
+
+    for (let t = 0; t < gridTriangles; t++) {
+      const a = vertex(geometry.indices[t * 3]!);
+      const b = vertex(geometry.indices[t * 3 + 1]!);
+      const c = vertex(geometry.indices[t * 3 + 2]!);
+
+      const faceNormal = b.sub(a).cross(c.sub(a)).normalized();
+
+      expect(
+        faceNormal.dot(a.normalized()),
+        `triangle ${t} faces inward`,
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it('agrees with the vertex normals it ships', () => {
+    // Geometric and shading normals pointing opposite ways is the same bug
+    // seen from the other side.
+    const geometry = buildChunkGeometry(chunkAt(4, 2, 6, 6), PLANET_RADIUS);
+
+    for (let i = 0; i < CHUNK_RESOLUTION ** 2; i += 37) {
+      const position = new Vec3(
+        geometry.positions[i * 3]!,
+        geometry.positions[i * 3 + 1]!,
+        geometry.positions[i * 3 + 2]!,
+      ).add(geometry.centre);
+
+      const normal = new Vec3(
+        geometry.normals[i * 3]!,
+        geometry.normals[i * 3 + 1]!,
+        geometry.normals[i * 3 + 2]!,
+      );
+
+      expect(normal.dot(position.normalized())).toBeGreaterThan(0.5);
+    }
+  });
+});

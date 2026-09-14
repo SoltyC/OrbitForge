@@ -61,10 +61,14 @@ export function buildChunkIndices(resolution = CHUNK_RESOLUTION): Uint32Array {
   const indices: number[] = [];
   const at = (x: number, y: number): number => y * resolution + x;
 
+  // Counter-clockwise seen from outside the planet, which is what the renderer
+  // treats as front-facing. Wound the other way the whole surface is culled and
+  // the view passes straight through the ground — with the vertex normals still
+  // perfectly correct, so nothing looks wrong except that there is no terrain.
   for (let y = 0; y < resolution - 1; y++) {
     for (let x = 0; x < resolution - 1; x++) {
-      indices.push(at(x, y), at(x, y + 1), at(x + 1, y));
-      indices.push(at(x + 1, y), at(x, y + 1), at(x + 1, y + 1));
+      indices.push(at(x, y), at(x + 1, y), at(x, y + 1));
+      indices.push(at(x + 1, y), at(x + 1, y + 1), at(x, y + 1));
     }
   }
 
@@ -89,10 +93,10 @@ export function buildChunkIndices(resolution = CHUNK_RESOLUTION): Uint32Array {
     skirt += resolution;
   };
 
-  addSkirt((i) => at(i, 0), true);
-  addSkirt((i) => at(i, resolution - 1), false);
-  addSkirt((i) => at(0, i), false);
-  addSkirt((i) => at(resolution - 1, i), true);
+  addSkirt((i) => at(i, 0), false);
+  addSkirt((i) => at(i, resolution - 1), true);
+  addSkirt((i) => at(0, i), true);
+  addSkirt((i) => at(resolution - 1, i), false);
 
   return new Uint32Array(indices);
 }
