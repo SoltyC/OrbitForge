@@ -201,6 +201,10 @@ async function main(): Promise<void> {
     // Recentre the world on the vessel every frame to keep f32 precision. The
     // vessel then sits at the scene origin and the body centre lands at minus
     // its simulation position.
+    // Clouds need several seconds of noise baked before they can be drawn;
+    // this spends it a few milliseconds at a time rather than up front.
+    system.stepCloudBakes();
+
     origin.setOrigin(current.position);
 
     // Bodies are placed through the shared root frame, so this stays correct

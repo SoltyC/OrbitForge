@@ -19,6 +19,9 @@ import { BODIES, parentOf } from '../bodies/system.js';
 import type { Body } from '../bodies/types.js';
 import { stateFromElements } from '../sim/orbit.js';
 import type { Vec3 } from '../sim/vec3.js';
+import { DEFAULT_CLOUD_LAYER } from '../clouds/density.js';
+import { CloudBakeRunner } from './clouds/cloudBakeRunner.js';
+import { uploadCloudTextures } from './clouds/cloudTextureUpload.js';
 import { createPlanetView, updatePlanetRotation } from './planet.js';
 import { SUN_DIRECTION } from './renderer.js';
 import type { PlanetView } from './planet.js';
@@ -37,6 +40,7 @@ interface BodyEntry {
 export class SystemView {
   readonly group = new Group();
   private readonly entries: BodyEntry[] = [];
+  private readonly bakes = new Map<string, CloudBakeRunner>();
 
   constructor() {
     this.group.name = 'system';
@@ -50,7 +54,34 @@ export class SystemView {
       if (orbitLine) this.group.add(orbitLine);
 
       this.entries.push({ body, parent, view, orbitLine });
+
+      // Bodies with a sky get clouds, once their noise has finished baking.
+      if (view.sky) this.bakes.set(body.id, new CloudBakeRunner(DEFAULT_CLOUD_LAYER.seed));
     }
+  }
+
+  /**
+   * Advance any outstanding cloud bakes, handing over the textures on the
+   * frame each one finishes. Cheap no-op once they are all done.
+   */
+  stepCloudBakes(): void {
+    for (const [bodyId, runner] of this.bakes) {
+      const baked = runner.step();
+      if (!baked) continue;
+
+      const entry = this.entries.find((candidate) => candidate.body.id === bodyId);
+      entry?.view.sky?.setCloudTextures(uploadCloudTextures(baked));
+      this.bakes.delete(bodyId);
+    }
+  }
+
+  /** Overall bake progress in [0, 1]; 1 when there is nothing left to do. */
+  get cloudBakeProgress(): number {
+    if (this.bakes.size === 0) return 1;
+
+    let total = 0;
+    for (const runner of this.bakes.values()) total += runner.progress;
+    return total / this.bakes.size;
   }
 
   /**

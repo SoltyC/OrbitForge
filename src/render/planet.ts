@@ -7,6 +7,7 @@
  */
 import { Mesh, MeshStandardMaterial, SphereGeometry, Group } from 'three/webgpu';
 import { createAtmosphereModel } from '../atmosphere/model.js';
+import { DEFAULT_CLOUD_LAYER } from '../clouds/density.js';
 import type { Body } from '../bodies/types.js';
 import { createSkyView } from './atmosphere/skyMaterial.js';
 import type { SkyView } from './atmosphere/skyMaterial.js';
@@ -47,7 +48,10 @@ export function createPlanetView(body: Body): PlanetView {
   spinFrame.add(surface);
 
   const model = createAtmosphereModel(body);
-  const sky = model ? createSkyView(model) : null;
+  // Clouds live in the sky pass, so the layer is described per body here.
+  const sky = model
+    ? createSkyView(model, { ...DEFAULT_CLOUD_LAYER, planetRadius: body.radius })
+    : null;
   if (sky) group.add(sky.mesh);
 
   return { group, surface, sky };
