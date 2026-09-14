@@ -13,6 +13,7 @@ import { createPathfinder } from '../src/parts/testVehicle.js';
 import { createPrelaunchState } from '../src/sim/flightState.js';
 import { groundRadiusAt } from '../src/sim/forces.js';
 import { step } from '../src/sim/simulation.js';
+import { runAscent } from './helpers/runAscent.js';
 import { Vec3 } from '../src/sim/vec3.js';
 import {
   FACE_COUNT,
@@ -421,7 +422,7 @@ describe('launch site', () => {
 
   it('places a new vessel on the ground rather than at sea level', () => {
     const state = createPrelaunchState(TERRIN, createPathfinder());
-    const ground = groundRadiusAt(TERRIN, state.position);
+    const ground = groundRadiusAt(TERRIN, state.position, 0);
 
     expect(state.position.length).toBeCloseTo(ground, 3);
     expect(state.position.length).toBeGreaterThan(TERRIN.radius);
@@ -455,7 +456,7 @@ describe('ground contact over terrain', () => {
 
     expect(state.regime).toBe('landed');
     expect(state.position.length).toBeCloseTo(
-      groundRadiusAt(TERRIN, state.position),
+      groundRadiusAt(TERRIN, state.position, state.time),
       1,
     );
   });
@@ -463,12 +464,73 @@ describe('ground contact over terrain', () => {
   it('skips the height field well above the tallest ground', () => {
     // Terrain must stay out of the physics loop except where it can matter.
     const high = new Vec3(TERRIN.radius + 500_000, 0, 0);
-    expect(groundRadiusAt(TERRIN, high)).toBe(TERRIN.radius);
+    expect(groundRadiusAt(TERRIN, high, 0)).toBe(TERRIN.radius);
   });
 
   it('reports sea level for a body with no height field', () => {
-    expect(groundRadiusAt(LUNARA, new Vec3(LUNARA.radius + 10, 0, 0))).toBe(
+    expect(groundRadiusAt(LUNARA, new Vec3(LUNARA.radius + 10, 0, 0), 0)).toBe(
       LUNARA.radius,
+    );
+  });
+});
+
+describe('launch conditions', () => {
+  const SUN = new Vec3(1, 0.35, 0.2).normalized();
+
+  it('starts the game in daylight', () => {
+    // The flattest equatorial land sat at a sun angle of -0.955, so the game
+    // opened at midnight — ground, sky and sea all correctly black, which is
+    // indistinguishable from a renderer that has failed.
+    expect(TERRIN.launchSite.normalized().dot(SUN)).toBeGreaterThan(0.3);
+  });
+});
+
+describe('terrain in the rotating frame', () => {
+  it('keeps the ground still beneath a point fixed to the surface', () => {
+    // The ground is fixed to the body's rotating frame. Sampling it at the
+    // inertial position instead drags the landscape west at 174 m/s, and a
+    // rocket on the pad has the hillside sliding out from under it faster than
+    // its engines can lift it clear.
+    const direction = TERRIN.launchSite.normalized();
+    const atEpoch = groundRadiusAt(TERRIN, direction.scale(TERRIN.radius), 0);
+
+    // A quarter of a day later, that same patch of ground has rotated with the
+    // planet — and must still be the same height.
+    const quarterDay = TERRIN.rotationPeriod / 4;
+    const angle = (2 * Math.PI * quarterDay) / TERRIN.rotationPeriod;
+    const rotated = new Vec3(
+      direction.x * Math.cos(angle) - direction.y * Math.sin(angle),
+      direction.x * Math.sin(angle) + direction.y * Math.cos(angle),
+      direction.z,
+    );
+
+    expect(groundRadiusAt(TERRIN, rotated.scale(TERRIN.radius), quarterDay)).toBeCloseTo(
+      atEpoch,
+      6,
+    );
+  });
+
+  it('does report different ground for a different place', () => {
+    // The complement: the test above would also pass if the height field were
+    // simply constant.
+    const a = groundRadiusAt(TERRIN, TERRIN.launchSite.normalized().scale(TERRIN.radius), 0);
+    const b = groundRadiusAt(TERRIN, new Vec3(0, TERRIN.radius, 0), 0);
+
+    expect(Math.abs(a - b)).toBeGreaterThan(1);
+  });
+
+  it('gets a rocket to orbit from the real launch site', () => {
+    // The end-to-end consequence of both bugs: with the ground sliding beneath
+    // it the vehicle never left the pad, and the ascent reached 1.3 km.
+    const result = runAscent(
+      TERRIN,
+      createPathfinder(),
+      { target: { orbitRadius: TERRIN.radius + 80_000 }, autopilotEnabled: true },
+      1_500,
+    );
+
+    expect(result.elements.periapsis - TERRIN.radius).toBeGreaterThan(
+      TERRIN.atmosphere!.height,
     );
   });
 });

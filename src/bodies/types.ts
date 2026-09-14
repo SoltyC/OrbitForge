@@ -54,9 +54,12 @@ export interface Body {
    * On the equator, and not merely near it. Launching nine degrees off put the
    * vessel into an inclined orbit, and the transfer planner works in one plane
    * — the moon simply stopped being reachable, and a mission that had taken
-   * nine hours ran for three thousand. This is the flattest equatorial land
-   * the height field offers: 253 m, with under twenty metres of relief across
-   * two kilometres.
+   * nine hours ran for three thousand.
+   *
+   * And on the daylight side. The flattest equatorial land happened to sit at
+   * a sun angle of -0.955, so the game opened at midnight: ground, sky and sea
+   * all correctly black, which reads exactly like a renderer that has failed.
+   * This is a little rougher and lit.
    */
   readonly launchSite: Vec3;
 }

@@ -303,7 +303,7 @@ function resolveGroundContact(
   thrustMagnitude: number,
 ): { state: TranslationalState; regime: FlightState['regime'] } {
   const body = state.body;
-  const ground = groundRadiusAt(body, next.position);
+  const ground = groundRadiusAt(body, next.position, state.time);
 
   // A little tolerance, because the ground is not a sphere any more. Travelling
   // along a slope changes the surface height under a vessel about as fast as

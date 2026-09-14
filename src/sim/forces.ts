@@ -79,15 +79,38 @@ export function altitudeOf(body: Body, position: Vec3): number {
  * highest ground that field can produce — which keeps the terrain out of the
  * physics loop for all but the last few kilometres of a flight, where it is
  * the only place it can matter.
+ *
+ * The position is un-rotated into the body's own frame first, because that is
+ * the frame the ground is fixed to. Sampling at the inertial position instead
+ * drags the whole landscape westward under everything standing on it at the
+ * speed of the planet's rotation — 174 m/s at Terrin's equator. A rocket on
+ * the pad then has the hillside sliding beneath it faster than its engines can
+ * lift it clear, and it never leaves the ground at all.
  */
-export function groundRadiusAt(body: Body, position: Vec3): number {
+export function groundRadiusAt(body: Body, position: Vec3, time: number): number {
   const profile = body.terrain;
   if (!profile) return body.radius;
 
   const ceiling = body.radius + profile.continentAmplitude + profile.mountainAmplitude;
   if (position.length > ceiling) return body.radius;
 
-  return terrainRadius(body.radius, position.normalized(), profile);
+  return terrainRadius(body.radius, bodyFixedDirection(body, position, time), profile);
+}
+
+/**
+ * A direction in the body's rotating frame — the one its surface is fixed to.
+ * Bodies spin about +Z, matching the rest of the force model.
+ */
+export function bodyFixedDirection(body: Body, position: Vec3, time: number): Vec3 {
+  const angle = -(2 * Math.PI * time) / body.rotationPeriod;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+
+  return new Vec3(
+    position.x * cos - position.y * sin,
+    position.x * sin + position.y * cos,
+    position.z,
+  ).normalized();
 }
 
 /** Speed relative to the rotating surface — what a pitot tube would read. */

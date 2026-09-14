@@ -302,16 +302,17 @@ export function createSkyView(model: AtmosphereModel, layer: CloudLayer): SkyVie
   material.blendSrcAlpha = OneFactor;
   material.blendDstAlpha = OneMinusSrcAlphaFactor;
   material.depthWrite = false;
-  // Depth testing is kept on deliberately. The shell sits far away, so it is
-  // rejected wherever solid geometry has already been drawn: early-z discards
-  // most of the work for free, and the ray's full-atmosphere haze does not get
-  // painted over a rocket sixty metres from the camera. The limb, which is sky
-  // seen past the planet's silhouette, is unaffected.
+  // No depth testing. The sky is drawn in its own pass with nothing else in
+  // it, so there is nothing to test against — and that pass renders into a
+  // target with no depth attachment, which a pipeline that wants depth cannot
+  // legally draw into at all.
   //
-  // The cost is no aerial perspective over the surface itself; that arrives
-  // with the terrain shader in milestone 7, where there is a surface worth
-  // attenuating.
-  material.depthTest = true;
+  // It used to be on, back when the sky shared a pass with the planet and the
+  // vessel: it bought early-z rejection behind solid geometry and kept the
+  // full-atmosphere haze off a rocket sixty metres away. Splitting the passes
+  // achieves both by construction, since the foreground is simply drawn over
+  // the sky afterwards.
+  material.depthTest = false;
   material.side = BackSide;
 
   // A shell large enough that the camera is always inside it.

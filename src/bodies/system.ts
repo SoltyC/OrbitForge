@@ -42,7 +42,7 @@ export const TERRIN: Body = {
     color: 0x3a6b4f,
   },
   terrain: DEFAULT_TERRAIN,
-  launchSite: new Vec3(-0.995045, -0.099424, 0),
+  launchSite: new Vec3(0.920478, -0.390795, 0),
 };
 
 /**

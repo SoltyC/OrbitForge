@@ -91,7 +91,7 @@ export function createPrelaunchState(
   // site or float it above one.
   const direction = body.launchSite.normalized();
   const position = direction.scale(
-    groundRadiusAt(body, direction.scale(body.radius)) + padHeight,
+    groundRadiusAt(body, direction.scale(body.radius), 0) + padHeight,
   );
   // Sitting on the pad means co-rotating with the surface.
   const spinAxis = new Vec3(0, 0, (2 * Math.PI) / body.rotationPeriod);
