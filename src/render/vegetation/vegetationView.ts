@@ -33,7 +33,7 @@ import type { FaceIndex } from '../../terrain/cubeSphere.js';
 import type { TerrainProfile } from '../../terrain/height.js';
 import { DEFAULT_TERRAIN } from '../../terrain/height.js';
 import { buildPlant, drawTraits } from '../../vegetation/plantGeometry.js';
-import type { PlantMesh } from '../../vegetation/plantGeometry.js';
+import type { PlantDetail, PlantMesh } from '../../vegetation/plantGeometry.js';
 import { cellIndex, cellsPerFace, plantsInBlock } from '../../vegetation/placement.js';
 import { DEFAULT_VEGETATION, hashUnit } from '../../vegetation/scatter.js';
 import type { VegetationProfile } from '../../vegetation/scatter.js';
@@ -41,26 +41,30 @@ import { SPECIES } from '../../vegetation/species.js';
 import type { Species, SpeciesId } from '../../vegetation/species.js';
 
 /**
- * Cells along one side of a patch.
+ * Cells along one side of a patch, in the nearest band.
  *
  * Larger patches amortise the shared border of height samples over more cells:
  * at 24 a patch costs 1.8 ms for 394 plants, at 32 it is 2.4 ms for 751. The
  * ceiling is responsiveness — a patch is the unit of work, so an oversized one
  * cannot be interrupted partway through a frame.
+ *
+ * Distant bands use multiples of this. Holding one size across a 900 m radius
+ * needed 2,477 patches and 7,109 draw calls, almost all of them a handful of
+ * trees apiece; doubling the patch with each band keeps the count flat as the
+ * area grows, which is the whole point of the bands.
  */
 const PATCH_CELLS = 32;
 
 /**
  * How far plants are drawn (m).
  *
- * Measured, not chosen. Before the height samples were shared across a patch,
- * a 420 m radius wanted 1369 patches at 14 ms each — some nineteen seconds
- * before the field appeared. At 150 m it is 121 patches of 2.4 ms, about a
- * third of a second, and individual plants have stopped being resolvable well
- * before that distance anyway: past it the terrain's own slope-and-altitude
- * colouring is a better and far cheaper representation than geometry.
+ * Trees have to carry much further than undergrowth. At 150 m the vegetation
+ * stopped in a square underfoot while the terrain ran to the horizon, which
+ * reads as a patch of forest sitting on a bare planet. Undergrowth still fades
+ * out within tens of metres — see `drawDistanceFor` — so what reaches this far
+ * is only the canopy, which is sparse and, at distance, cheap.
  */
-const DRAW_DISTANCE = 150;
+const DRAW_DISTANCE = 700;
 
 /** Above this altitude nothing is drawn (m). */
 const MAX_ALTITUDE = 900;
@@ -76,16 +80,35 @@ const MAX_ALTITUDE = 900;
 const VARIANTS = 4;
 
 /**
- * How far a plant of a given height is worth drawing (m).
+ * Variants actually used at a detail level.
  *
- * Undergrowth is the whole cost. Grass sits a metre apart, so a 150 m radius
- * holds some seventy thousand tufts — three million triangles for something
- * indistinguishable from ground colour past about forty metres. Tying the
- * distance to the plant's own size keeps the trees, which are visible from far
- * off and sparse enough to be cheap, and drops the rest as it stops mattering.
+ * Every variant is its own geometry and so its own draw call per patch. Close
+ * up the differences between four silhouettes are what stops the field reading
+ * as tiling; at several hundred metres a tree is a few pixels of canopy and
+ * two are indistinguishable from four, so the far bands halve their draws for
+ * nothing anyone can see.
  */
-function drawDistanceFor(height: number): number {
-  return Math.min(DRAW_DISTANCE, 14 + height * 11);
+function variantsForDetail(detail: PlantDetail): number {
+  return detail === 0 ? VARIANTS : detail === 1 ? 3 : 2;
+}
+
+/**
+ * Metres of draw distance a plant earns per metre of its own height.
+ *
+ * Undergrowth is the whole cost: grass sits a metre apart, so a wide radius
+ * holds tens of thousands of tufts for something indistinguishable from ground
+ * colour past about forty metres. Tying the distance to the plant's own size
+ * keeps the trees, which are visible from far off and sparse enough to be
+ * cheap, and drops the rest as it stops mattering.
+ */
+const DISTANCE_PER_METRE = 46;
+
+/** Baseline distance every plant is drawn to, however small (m). */
+const MINIMUM_DISTANCE = 12;
+
+/** The smallest plant still worth drawing at a given distance (m). */
+function minimumHeightAt(distance: number): number {
+  return Math.max(0, (distance - MINIMUM_DISTANCE) / DISTANCE_PER_METRE);
 }
 
 /**
@@ -96,7 +119,33 @@ function drawDistanceFor(height: number): number {
  * towards a patch rebuilds it with its undergrowth rather than leaving bare
  * ground, and walking away drops it again.
  */
-const BANDS: readonly number[] = [0, 40, 90];
+const BANDS: readonly number[] = [0, 45, 110, 260, 520];
+
+/**
+ * Cells along a patch in a given band.
+ *
+ * Doubling with each band keeps the patch count flat as the area grows, but
+ * only up to a point: a patch must be several times narrower than the band it
+ * sits in, or none fits and the band silently draws nothing. That happened —
+ * the outermost band used 512 m patches inside a 380 m annulus and contributed
+ * not one plant, which looked exactly like the draw distance being ignored.
+ */
+function patchCellsForBand(bandIndex: number): number {
+  return PATCH_CELLS * 2 ** Math.min(bandIndex, 2);
+}
+
+/**
+ * How coarsely a band's plants are grown.
+ *
+ * Detail is shed with distance rather than plants being dropped: past a couple
+ * of hundred metres a tree is a silhouette, and the branches inside it resolve
+ * to less than a pixel.
+ */
+function detailForBand(band: number): PlantDetail {
+  if (band < 110) return 0;
+  if (band < 260) return 1;
+  return 2;
+}
 
 /** Milliseconds of patch building per frame. */
 const BUDGET_MS = 4;
@@ -119,14 +168,16 @@ interface QueuedPatch {
   readonly face: FaceIndex;
   readonly x: number;
   readonly y: number;
-  /** Distance band this patch is being built for (m). */
+  /** Near edge of the distance band this patch is being built for (m). */
   readonly band: number;
+  readonly bandIndex: number;
 }
 
 export class VegetationView {
   readonly group = new Group();
 
-  private readonly variants = new Map<SpeciesId, Variant[]>();
+  /** Variants per species, keyed by detail level. */
+  private readonly variants = new Map<string, Variant[]>();
   private readonly materials = new Map<SpeciesId, MeshStandardMaterial>();
   private readonly patches = new Map<string, Patch>();
   private readonly queue: QueuedPatch[] = [];
@@ -144,7 +195,9 @@ export class VegetationView {
     this.perFace = cellsPerFace(planetRadius, profile.cellSize);
 
     for (const species of SPECIES) {
-      this.variants.set(species.id, growVariants(species));
+      for (const detail of [0, 1, 2] as PlantDetail[]) {
+        this.variants.set(`${species.id}/${detail}`, growVariants(species, detail));
+      }
 
       // Colour rides on the vertices, so one material serves every variant.
       this.materials.set(
@@ -171,40 +224,57 @@ export class VegetationView {
     }
 
     // The answer only changes once the camera crosses a patch boundary.
-    const patchSize = PATCH_CELLS * this.profile.cellSize;
-    if (this.lastCamera && this.lastCamera.distanceTo(camera) < patchSize * 0.2) {
+    const nearestPatch = PATCH_CELLS * this.profile.cellSize;
+    if (this.lastCamera && this.lastCamera.distanceTo(camera) < nearestPatch * 0.2) {
       return;
     }
     this.lastCamera = camera;
 
     const here = directionToFace(camera);
-    const centreX = Math.floor(cellIndex(here.u, this.perFace) / PATCH_CELLS);
-    const centreY = Math.floor(cellIndex(here.v, this.perFace) / PATCH_CELLS);
+    const cameraCellX = cellIndex(here.u, this.perFace);
+    const cameraCellY = cellIndex(here.v, this.perFace);
 
-    const reach = Math.ceil(DRAW_DISTANCE / patchSize);
     const wanted = new Set<string>();
-
     this.queue.length = 0;
 
-    for (let y = -reach; y <= reach; y++) {
-      for (let x = -reach; x <= reach; x++) {
-        // Distance to the patch, in patch widths, then in metres.
-        const distance = Math.hypot(x, y) * patchSize;
-        if (distance > DRAW_DISTANCE) continue;
+    // Each band is an annulus, walked at its own patch size.
+    for (let bandIndex = 0; bandIndex < BANDS.length; bandIndex++) {
+      const band = BANDS[bandIndex]!;
+      const outer = BANDS[bandIndex + 1] ?? DRAW_DISTANCE;
+      if (band >= DRAW_DISTANCE) break;
 
-        // The largest band at or below this patch's distance.
-        let band = 0;
-        for (const edge of BANDS) if (distance >= edge) band = edge;
+      const cells = patchCellsForBand(bandIndex);
+      const size = cells * this.profile.cellSize;
 
-        const key = `${here.face}/${centreX + x}/${centreY + y}/${band}`;
-        wanted.add(key);
+      const centreX = Math.floor(cameraCellX / cells);
+      const centreY = Math.floor(cameraCellY / cells);
+      const reach = Math.ceil(outer / size);
 
-        const existing = this.patches.get(key);
-        if (existing) {
-          existing.lastUsed = this.frame;
-          existing.group.visible = true;
-        } else {
-          this.queue.push({ face: here.face, x: centreX + x, y: centreY + y, band });
+      for (let y = -reach; y <= reach; y++) {
+        for (let x = -reach; x <= reach; x++) {
+          // Distance to the nearest point of this patch, so a patch straddling
+          // a band edge is claimed by the nearer band and drawn only once.
+          const distance =
+            Math.hypot(Math.max(0, Math.abs(x) - 0.5), Math.max(0, Math.abs(y) - 0.5)) * size;
+
+          if (distance < band || distance >= outer) continue;
+
+          const key = `${here.face}/${bandIndex}/${centreX + x}/${centreY + y}`;
+          wanted.add(key);
+
+          const existing = this.patches.get(key);
+          if (existing) {
+            existing.lastUsed = this.frame;
+            existing.group.visible = true;
+          } else {
+            this.queue.push({
+              face: here.face,
+              x: centreX + x,
+              y: centreY + y,
+              band,
+              bandIndex,
+            });
+          }
         }
       }
     }
@@ -213,12 +283,8 @@ export class VegetationView {
       if (!wanted.has(key)) patch.group.visible = false;
     }
 
-    // Nearest first, so the ground the camera is standing on fills in before
-    // the distance does.
-    this.queue.sort(
-      (a, b) =>
-        Math.hypot(a.x - centreX, a.y - centreY) - Math.hypot(b.x - centreX, b.y - centreY),
-    );
+    // Nearest bands first, so the ground underfoot fills in before the horizon.
+    this.queue.sort((a, b) => a.bandIndex - b.bandIndex);
 
     this.evict();
   }
@@ -231,7 +297,7 @@ export class VegetationView {
 
     while (this.queue.length > 0 && performance.now() < deadline) {
       const next = this.queue.shift()!;
-      const key = `${next.face}/${next.x}/${next.y}/${next.band}`;
+      const key = `${next.face}/${next.bandIndex}/${next.x}/${next.y}`;
       if (this.patches.has(key)) continue;
 
       const group = this.buildPatch(next);
@@ -265,33 +331,36 @@ export class VegetationView {
    */
   private buildPatch(patch: QueuedPatch): Group {
     const group = new Group();
-    group.name = `flora:${patch.face}/${patch.x}/${patch.y}@${patch.band}`;
+    group.name = `flora:${patch.face}/${patch.bandIndex}/${patch.x}/${patch.y}`;
 
     // Keyed by species and variant, since each variant is its own geometry.
     const batches = new Map<string, { species: Species; variant: number; matrices: Matrix4[] }>();
 
-    const baseX = patch.x * PATCH_CELLS;
-    const baseY = patch.y * PATCH_CELLS;
+    const cells = patchCellsForBand(patch.bandIndex);
+    const baseX = patch.x * cells;
+    const baseY = patch.y * cells;
+
+    const detail = detailForBand(patch.band);
 
     // One pass over the whole patch, sharing its height-field samples.
     const plants = plantsInBlock(
       patch.face,
       baseX,
       baseY,
-      PATCH_CELLS,
+      cells,
       this.perFace,
       this.planetRadius,
       this.terrain,
       this.profile,
+      minimumHeightAt(patch.band),
     );
 
     plants.forEach((plant, index) => {
-      // Drop anything too small to be worth drawing this far out.
-      if (drawDistanceFor(plant.traits.height) < patch.band) return;
 
       {
         const variant = Math.floor(
-          hashUnit(baseX + index, baseY + index * 7, this.profile.seed + 601) * VARIANTS,
+          hashUnit(baseX + index, baseY + index * 7, this.profile.seed + 601) *
+            variantsForDetail(detail),
         );
 
         const key = `${plant.species.id}/${variant}`;
@@ -301,7 +370,7 @@ export class VegetationView {
           batches.set(key, batch);
         }
 
-        const grown = this.variants.get(plant.species.id)![variant]!;
+        const grown = this.variants.get(`${plant.species.id}/${detail}`)![variant]!;
 
         batch.matrices.push(
           standingMatrix(
@@ -317,7 +386,7 @@ export class VegetationView {
     });
 
     for (const batch of batches.values()) {
-      const variant = this.variants.get(batch.species.id)![batch.variant]!;
+      const variant = this.variants.get(`${batch.species.id}/${detail}`)![batch.variant]!;
 
       const mesh = new InstancedMesh(
         variant.geometry,
@@ -380,7 +449,7 @@ export class VegetationView {
  * branch count and spread differ too, so the silhouettes differ rather than
  * just the scales.
  */
-function growVariants(species: Species): Variant[] {
+function growVariants(species: Species, detail: PlantDetail): Variant[] {
   const variants: Variant[] = [];
 
   for (let i = 0; i < VARIANTS; i++) {
@@ -389,7 +458,7 @@ function growVariants(species: Species): Variant[] {
 
     const traits = drawTraits(species, rolls);
     variants.push({
-      geometry: toGeometry(buildPlant(species, traits)),
+      geometry: toGeometry(buildPlant(species, traits, detail)),
       height: traits.height,
     });
   }

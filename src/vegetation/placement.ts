@@ -21,7 +21,12 @@ import type { PlantTraits } from './plantGeometry.js';
 import { hashUnit } from './scatter.js';
 import type { VegetationProfile } from './scatter.js';
 import { DEFAULT_VEGETATION, growthDensity } from './scatter.js';
-import { pickSpecies } from './species.js';
+import {
+  SPECIES,
+  pickSpecies,
+  speciesGridOffset,
+  speciesStride,
+} from './species.js';
 import type { Species } from './species.js';
 
 export interface PlacedPlant {
@@ -91,89 +96,135 @@ export function plantsInBlock(
   planetRadius: number,
   terrain: TerrainProfile = DEFAULT_TERRAIN,
   vegetation: VegetationProfile = DEFAULT_VEGETATION,
+  minHeight = 0,
 ): PlacedPlant[] {
+  // Only species that can reach the caller's minimum height are in play.
+  //
+  // A distant patch is five hundred cells square — a quarter of a million of
+  // them — and holds nothing but trees, sitting ten metres apart. Visiting
+  // every cell to find them took seven and a half seconds.
+  //
+  // So the walk visits each surviving species' own grid rather than stepping
+  // by a fixed stride. A fixed step looks equivalent and is not: the grids are
+  // offset by species and their spacings share no common factor, so a stride
+  // that does not align with a species' grid misses that species entirely —
+  // measured as three quarters of the field quietly vanishing.
+  const eligible = SPECIES.filter((species) => species.height.max >= minHeight);
+  if (eligible.length === 0) return [];
+
+  const candidates = new Set<number>();
+
+  for (const species of eligible) {
+    const stride = speciesStride(species, vegetation.cellSize);
+    const [offsetX, offsetY] = speciesGridOffset(species, stride);
+
+    // First cell at or after the block's origin that lies on this grid.
+    const firstX = alignUp(originX, stride, offsetX) - originX;
+    const firstY = alignUp(originY, stride, offsetY) - originY;
+
+    for (let y = firstY; y < size; y += stride) {
+      if (y < 0) continue;
+      for (let x = firstX; x < size; x += stride) {
+        if (x < 0) continue;
+        candidates.add(y * size + x);
+      }
+    }
+  }
+
   const stride = size + 2;
   const elevations = new Float64Array(stride * stride);
   const directions: Vec3[] = new Array(stride * stride);
+  const sampled = new Uint8Array(stride * stride);
 
-  // One bordered grid of samples, shared by every cell in the block.
-  for (let y = 0; y < stride; y++) {
-    for (let x = 0; x < stride; x++) {
+  /** Sample the height field at a bordered-grid index, once. */
+  const sampleAt = (bx: number, by: number): number => {
+    const index = by * stride + bx;
+    if (sampled[index] === 0) {
       const direction = faceToDirection(
         face,
-        cellCoordinate(originX + x - 1, perFace),
-        cellCoordinate(originY + y - 1, perFace),
+        cellCoordinate(originX + bx - 1, perFace),
+        cellCoordinate(originY + by - 1, perFace),
       );
-
-      directions[y * stride + x] = direction;
-      elevations[y * stride + x] = elevationAt(direction, terrain);
+      directions[index] = direction;
+      elevations[index] = elevationAt(direction, terrain);
+      sampled[index] = 1;
     }
-  }
+    return elevations[index]!;
+  };
 
   const run = (2 * ((Math.PI / 2) * planetRadius)) / perFace;
   const salt = face * 7_919;
   const plants: PlacedPlant[] = [];
 
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const cellX = originX + x;
-      const cellY = originY + y;
-      if (cellX < 0 || cellY < 0 || cellX >= perFace || cellY >= perFace) continue;
+  for (const packed of candidates) {
+    const x = packed % size;
+    const y = (packed - x) / size;
 
-      // Unoccupied cells cost nothing beyond the roll.
-      const occupancy = hashUnit(cellX + salt, cellY, vegetation.seed);
-      if (occupancy > vegetation.density) continue;
+    const cellX = originX + x;
+    const cellY = originY + y;
+    if (cellX < 0 || cellY < 0 || cellX >= perFace || cellY >= perFace) continue;
 
-      const centre = (y + 1) * stride + (x + 1);
-      const elevation = elevations[centre]!;
-      if (elevation <= 0 || elevation > vegetation.treeLine) continue;
+    // Unoccupied cells cost nothing beyond the roll.
+    const occupancy = hashUnit(cellX + salt, cellY, vegetation.seed);
+    if (occupancy > vegetation.density) continue;
 
-      const slope =
-        Math.hypot(
-          elevations[centre + 1]! - elevations[centre - 1]!,
-          elevations[centre + stride]! - elevations[centre - stride]!,
-        ) / run;
+    const bx = x + 1;
+    const by = y + 1;
 
-      const density = growthDensity(elevation, slope, vegetation, terrain);
-      if (density <= 0 || occupancy > density * vegetation.density) continue;
+    const elevation = sampleAt(bx, by);
+    if (elevation <= 0 || elevation > vegetation.treeLine) continue;
 
-      const direction = directions[centre]!;
-      const species = pickSpecies(
-        hashUnit(cellX + salt, cellY, vegetation.seed + 17),
-        elevation,
-        slope,
-        warmthAt(direction, elevation),
-        cellX,
-        cellY,
-        vegetation.cellSize,
-      );
-      if (!species) continue;
+    const slope =
+      Math.hypot(
+        sampleAt(bx + 1, by) - sampleAt(bx - 1, by),
+        sampleAt(bx, by + 1) - sampleAt(bx, by - 1),
+      ) / run;
 
-      const rolls: number[] = [];
-      for (let i = 0; i < 9; i++) {
-        rolls.push(hashUnit(cellX + salt, cellY, vegetation.seed + 101 + i * 13));
-      }
-      const traits = drawTraits(species, rolls);
+    const density = growthDensity(elevation, slope, vegetation, terrain);
+    if (density <= 0 || occupancy > density * vegetation.density) continue;
 
-      // Offset within the cell, so plants are not on a visible lattice. Over a
-      // metre the ground does not move enough to be worth resampling, so the
-      // cell's own elevation stands.
-      const stand = faceToDirection(
-        face,
-        cellCoordinate(cellX, perFace) + ((rolls[6]! - 0.5) * 2) / perFace,
-        cellCoordinate(cellY, perFace) + ((rolls[8]! - 0.5) * 2) / perFace,
-      );
+    const direction = directions[by * stride + bx]!;
+    const species = pickSpecies(
+      hashUnit(cellX + salt, cellY, vegetation.seed + 17),
+      elevation,
+      slope,
+      warmthAt(direction, elevation),
+      cellX,
+      cellY,
+      vegetation.cellSize,
+    );
+    if (!species) continue;
 
-      plants.push({
-        species,
-        traits,
-        position: stand.scale(planetRadius + elevation),
-        up: stand,
-      });
+    const rolls: number[] = [];
+    for (let i = 0; i < 9; i++) {
+      rolls.push(hashUnit(cellX + salt, cellY, vegetation.seed + 101 + i * 13));
     }
+    const traits = drawTraits(species, rolls);
+    if (traits.height < minHeight) continue;
+
+    // Offset within the cell, so plants are not on a visible lattice. Over a
+    // metre the ground does not move enough to be worth resampling.
+    const stand = faceToDirection(
+      face,
+      cellCoordinate(cellX, perFace) + ((rolls[6]! - 0.5) * 2) / perFace,
+      cellCoordinate(cellY, perFace) + ((rolls[8]! - 0.5) * 2) / perFace,
+    );
+
+    plants.push({
+      species,
+      traits,
+      position: stand.scale(planetRadius + elevation),
+      up: stand,
+    });
   }
 
   return plants;
+}
+
+/** The first multiple of `stride` at or after `from` that carries `offset`. */
+function alignUp(from: number, stride: number, offset: number): number {
+  const remainder = (((from - offset) % stride) + stride) % stride;
+  return remainder === 0 ? from : from + (stride - remainder);
 }
 
 /** Local slope, as rise over run, from a central difference across cells. */

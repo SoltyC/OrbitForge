@@ -70,8 +70,23 @@ export function drawTraits(species: Species, rolls: readonly number[]): PlantTra
   };
 }
 
+/**
+ * Level of detail a plant is grown at.
+ *
+ * A tree is worth seeing from hundreds of metres away, and at that range its
+ * eight hundred triangles are resolving detail smaller than a pixel. Growing a
+ * coarser version of the same plant — fewer branches, fewer segments on each
+ * foliage mass — keeps the silhouette, which is all that survives the distance
+ * anyway, at a fraction of the cost.
+ */
+export type PlantDetail = 0 | 1 | 2;
+
 /** Build the mesh for one plant. */
-export function buildPlant(species: Species, traits: PlantTraits): PlantMesh {
+export function buildPlant(
+  species: Species,
+  traits: PlantTraits,
+  detail: PlantDetail = 0,
+): PlantMesh {
   const mesh: PlantMesh = {
     positions: [],
     normals: [],
@@ -80,21 +95,29 @@ export function buildPlant(species: Species, traits: PlantTraits): PlantMesh {
     sway: [],
   };
 
+  // Coarser plants shed limbs as well as segments: at distance a tree's
+  // silhouette is a mass on a trunk, and the individual branches inside it are
+  // no longer separable.
+  const coarse: PlantTraits =
+    detail === 0
+      ? traits
+      : { ...traits, limbs: Math.max(2, Math.round(traits.limbs / (detail + 1))) };
+
   switch (species.form) {
     case 'conifer':
-      growConifer(mesh, traits);
+      growConifer(mesh, coarse, detail);
       break;
     case 'canopy':
-      growCanopy(mesh, traits);
+      growCanopy(mesh, coarse, detail);
       break;
     case 'frond':
-      growFrond(mesh, traits);
+      growFrond(mesh, coarse, detail);
       break;
     case 'tuft':
-      growTuft(mesh, traits);
+      growTuft(mesh, coarse, detail);
       break;
     case 'rock':
-      growRock(mesh, traits);
+      growRock(mesh, coarse, detail);
       break;
   }
 
@@ -105,10 +128,10 @@ export function buildPlant(species: Species, traits: PlantTraits): PlantMesh {
  * A conifer: a tapering trunk carrying whorls of branches that shorten and
  * steepen towards the top.
  */
-function growConifer(mesh: PlantMesh, traits: PlantTraits): void {
+function growConifer(mesh: PlantMesh, traits: PlantTraits, detail: PlantDetail): void {
   const { height, spread, limbs } = traits;
 
-  addTaperedStem(mesh, height, height * 0.045, height * 0.008, traits.wood, 6);
+  addTaperedStem(mesh, height, height * 0.045, height * 0.008, traits.wood, detail === 0 ? 6 : 3);
 
   for (let i = 0; i < limbs; i++) {
     // Whorls start a third of the way up and crowd together near the crown.
@@ -119,12 +142,12 @@ function growConifer(mesh: PlantMesh, traits: PlantTraits): void {
     const reach = height * spread * (1 - Math.pow(t, 1.4)) * 1.15;
     if (reach < height * 0.02) continue;
 
-    const perWhorl = 3 + (i % 2);
+    const perWhorl = detail === 0 ? 3 + (i % 2) : 2;
     for (let b = 0; b < perWhorl; b++) {
       const angle = traits.rotation + (b / perWhorl) * Math.PI * 2 + i * 1.1;
       const droop = -0.25 - 0.3 * (1 - t);
 
-      addBough(mesh, y, angle, reach, droop, height * 0.02, traits.foliage, t);
+      addBough(mesh, y, angle, reach, droop, height * 0.02, traits.foliage, t, detail);
     }
   }
 }
@@ -133,11 +156,11 @@ function growConifer(mesh: PlantMesh, traits: PlantTraits): void {
  * A broadleaf or shrub: a short trunk forking into limbs, each carrying a
  * rounded mass of foliage.
  */
-function growCanopy(mesh: PlantMesh, traits: PlantTraits): void {
+function growCanopy(mesh: PlantMesh, traits: PlantTraits, detail: PlantDetail): void {
   const { height, spread, limbs } = traits;
 
   const trunkHeight = height * 0.45;
-  addTaperedStem(mesh, trunkHeight, height * 0.05, height * 0.03, traits.wood, 6);
+  addTaperedStem(mesh, trunkHeight, height * 0.05, height * 0.03, traits.wood, detail === 0 ? 6 : 3);
 
   for (let i = 0; i < limbs; i++) {
     const angle = traits.rotation + (i / limbs) * Math.PI * 2 + (i % 2) * 0.4;
@@ -147,7 +170,9 @@ function growCanopy(mesh: PlantMesh, traits: PlantTraits): void {
     const crownY = trunkHeight + height * 0.12 * lift;
 
     // A limb out to the crown, then the foliage mass sitting on its end.
-    addBough(mesh, trunkHeight * 0.8, angle, reach * 0.7, 0.5, height * 0.022, traits.wood, 0.3);
+    if (detail === 0) {
+      addBough(mesh, trunkHeight * 0.8, angle, reach * 0.7, 0.5, height * 0.022, traits.wood, 0.3, detail);
+    }
 
     // Each mass is tinted a little differently, so a canopy has variation
     // within it rather than being one flat colour across the whole tree.
@@ -161,31 +186,32 @@ function growCanopy(mesh: PlantMesh, traits: PlantTraits): void {
       height * spread * 0.42,
       [traits.foliage[0] * tint, traits.foliage[1] * tint, traits.foliage[2] * tint],
       0.85,
+      detail,
     );
   }
 
   // A crown mass over the middle, so the canopy closes rather than reading as
   // separate lumps on sticks.
-  addBlob(mesh, 0, height * 0.82, 0, height * spread * 0.52, traits.foliage, 0.7);
+  addBlob(mesh, 0, height * 0.82, 0, height * spread * 0.52, traits.foliage, 0.7, detail);
 }
 
 /** A palm or fern: a crown of long fronds arching out and down. */
-function growFrond(mesh: PlantMesh, traits: PlantTraits): void {
+function growFrond(mesh: PlantMesh, traits: PlantTraits, detail: PlantDetail): void {
   const { height, spread, limbs } = traits;
 
   const stemHeight = height * 0.62;
-  addTaperedStem(mesh, stemHeight, height * 0.035, height * 0.022, traits.wood, 5);
+  addTaperedStem(mesh, stemHeight, height * 0.035, height * 0.022, traits.wood, detail === 0 ? 5 : 3);
 
   for (let i = 0; i < limbs; i++) {
     const angle = traits.rotation + (i / limbs) * Math.PI * 2;
     const length = height * spread * (0.8 + 0.4 * ((i * 5) % 3) / 3);
 
-    addFrondBlade(mesh, stemHeight, angle, length, height * 0.1, traits.foliage);
+    addFrondBlade(mesh, stemHeight, angle, length, height * 0.1, traits.foliage, detail);
   }
 }
 
 /** Grass or flowers: a clump of blades splaying from a point. */
-function growTuft(mesh: PlantMesh, traits: PlantTraits): void {
+function growTuft(mesh: PlantMesh, traits: PlantTraits, detail: PlantDetail): void {
   const { height, spread, limbs } = traits;
 
   for (let i = 0; i < limbs; i++) {
@@ -201,17 +227,18 @@ function growTuft(mesh: PlantMesh, traits: PlantTraits): void {
       bladeHeight,
       height * 0.07,
       traits.foliage,
+      detail,
     );
   }
 }
 
 /** A boulder: a lumpy, irregular solid. */
-function growRock(mesh: PlantMesh, traits: PlantTraits): void {
+function growRock(mesh: PlantMesh, traits: PlantTraits, detail: PlantDetail): void {
   const { height, spread } = traits;
   const radius = height * spread * 0.5;
 
-  const rings = 4;
-  const segments = 7;
+  const rings = detail === 0 ? 4 : 2;
+  const segments = detail === 0 ? 7 : 4;
   const base = mesh.positions.length / 3;
 
   for (let r = 0; r <= rings; r++) {
@@ -288,9 +315,10 @@ function addBough(
   radius: number,
   colour: readonly [number, number, number],
   swayBase: number,
+  detail: PlantDetail,
 ): void {
   const base = mesh.positions.length / 3;
-  const sides = 4;
+  const sides = detail === 0 ? 4 : 3;
 
   const dirX = Math.cos(angle);
   const dirZ = Math.sin(angle);
@@ -340,12 +368,14 @@ function addBlob(
   radius: number,
   colour: readonly [number, number, number],
   sway: number,
+  detail: PlantDetail,
 ): void {
   // Enough segments that a canopy reads as a mass rather than as facets. At
   // three by six the foliage came out as flat angular plates, which is the
-  // single thing that most made these look modelled rather than grown.
-  const rings = 6;
-  const segments = 10;
+  // single thing that most made these look modelled rather than grown — but
+  // that only matters close up, so distance sheds them again.
+  const rings = detail === 0 ? 6 : detail === 1 ? 4 : 3;
+  const segments = detail === 0 ? 10 : detail === 1 ? 6 : 4;
   const base = mesh.positions.length / 3;
 
   for (let r = 0; r <= rings; r++) {
@@ -400,9 +430,10 @@ function addFrondBlade(
   length: number,
   width: number,
   colour: readonly [number, number, number],
+  detail: PlantDetail,
 ): void {
   const base = mesh.positions.length / 3;
-  const steps = 5;
+  const steps = detail === 0 ? 5 : 2;
 
   const dirX = Math.cos(angle);
   const dirZ = Math.sin(angle);
@@ -445,9 +476,10 @@ function addBlade(
   height: number,
   width: number,
   colour: readonly [number, number, number],
+  detail: PlantDetail,
 ): void {
   const base = mesh.positions.length / 3;
-  const steps = 3;
+  const steps = detail === 0 ? 3 : 1;
 
   const leanX = Math.cos(angle) * height * 0.3;
   const leanZ = Math.sin(angle) * height * 0.3;

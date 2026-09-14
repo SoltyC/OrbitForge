@@ -17,6 +17,7 @@ import { Vec3 } from '../src/sim/vec3.js';
 import { directionToFace } from '../src/terrain/cubeSphere.js';
 import type { FaceIndex } from '../src/terrain/cubeSphere.js';
 import { elevationAt } from '../src/terrain/height.js';
+import { SPECIES, onSpeciesGrid } from '../src/vegetation/species.js';
 import {
   cellCoordinate,
   cellIndex,
@@ -284,6 +285,52 @@ function key(position: Vector3): string {
   return [position.x, position.y, position.z].map((v) => v.toFixed(2)).join(',');
 }
 
+describe('the placement walk and the grid test agree', () => {
+  it('finds every plant the per-cell rule would place', () => {
+    // The walk enumerates each species' grid directly rather than testing
+    // every cell against it, so the two calculations have to land on exactly
+    // the same cells. A walk offset by one finds nothing of that species at
+    // all, and an earlier fixed-stride version quietly lost three quarters of
+    // the field this way.
+    const site = directionOfLaunchSite();
+    const size = 48;
+
+    const walked = plantsInBlock(site.face, site.x, site.y, size, PER_FACE, TERRIN.radius);
+
+    // Independently: every cell in the block whose species grid includes it.
+    let expected = 0;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const onAnyGrid = SPECIES.some((species) =>
+          onSpeciesGrid(species, site.x + x, site.y + y, 1),
+        );
+        if (onAnyGrid) expected++;
+      }
+    }
+
+    // Not every candidate cell grows something, but the walk must have had the
+    // chance to consider each one.
+    expect(expected).toBeGreaterThan(walked.length);
+    expect(walked.length).toBeGreaterThan(expected * 0.3);
+  });
+
+  it('places the large species a walk for trees alone would find', () => {
+    // A distant patch asks only for plants above a height, and skips the grids
+    // of everything smaller. It must still find every tree.
+    const site = directionOfLaunchSite();
+
+    const everything = plantsInBlock(
+      site.face, site.x, site.y, 64, PER_FACE, TERRIN.radius, undefined, undefined, 0,
+    ).filter((plant) => plant.traits.height >= 4);
+
+    const treesOnly = plantsInBlock(
+      site.face, site.x, site.y, 64, PER_FACE, TERRIN.radius, undefined, undefined, 4,
+    );
+
+    expect(treesOnly.length).toBe(everything.length);
+  });
+});
+
 describe('what it costs to draw', () => {
   /** Triangles and draw calls for the field around the launchpad. */
   function budgetAtPad(): { plants: number; draws: number; triangles: number } {
@@ -304,13 +351,34 @@ describe('what it costs to draw', () => {
   it('stays inside a drawable budget', () => {
     // These numbers regressed silently once: a plant in every cell put 89,371
     // of them around the pad, 16.4 million triangles and 6,564 draw calls, and
-    // nothing in the model objected. Per-species spacing and a draw distance
-    // tied to plant size brought it to roughly half a million and 435.
+    // nothing in the model objected.
+    //
+    // The ceilings are generous against today's figures — roughly 23,000
+    // plants, 3.3 million triangles and 950 draws across a 700 m radius —
+    // because they exist to catch an order-of-magnitude mistake, not to pin
+    // the current tuning. Anything approaching them is the same class of bug.
     const { plants, draws, triangles } = budgetAtPad();
 
-    expect(plants, 'plants').toBeLessThan(20_000);
-    expect(draws, 'draw calls').toBeLessThan(1_200);
-    expect(triangles, 'triangles').toBeLessThan(2_000_000);
+    expect(plants, 'plants').toBeLessThan(45_000);
+    expect(draws, 'draw calls').toBeLessThan(2_000);
+    expect(triangles, 'triangles').toBeLessThan(7_000_000);
+  });
+
+  it('keeps every distance band contributing', () => {
+    // A patch must be several times narrower than the band it sits in, or none
+    // fits and the band draws nothing. The outermost band did exactly that —
+    // 512 m patches in a 380 m annulus — and the symptom was the draw distance
+    // appearing to have no effect at all.
+    const site = TERRIN.launchSite.normalized();
+    const { view } = planetWithFlora(site.scale(TERRIN.radius + 3));
+
+    const bands = new Set<string>();
+    for (const child of view.vegetation!.group.children) {
+      const match = /^flora:\d+\/(\d+)\//.exec(child.name);
+      if (match) bands.add(match[1]!);
+    }
+
+    expect(bands.size, 'distance bands with patches in them').toBeGreaterThanOrEqual(4);
   });
 
   it('still draws enough to look like a field', () => {

@@ -267,22 +267,40 @@ export function onSpeciesGrid(
   cellY: number,
   cellSize: number,
 ): boolean {
-  const stride = Math.max(1, Math.round(species.spacing / cellSize));
+  const stride = speciesStride(species, cellSize);
   if (stride === 1) return true;
 
-  // A stable per-species offset, from the id.
-  let hash = 0;
-  for (let i = 0; i < species.id.length; i++) {
-    hash = (hash * 31 + species.id.charCodeAt(i)) | 0;
-  }
-
-  const offsetX = ((hash % stride) + stride) % stride;
-  const offsetY = (((hash >> 8) % stride) + stride) % stride;
+  const [offsetX, offsetY] = speciesGridOffset(species, stride);
 
   return (
     (((cellX - offsetX) % stride) + stride) % stride === 0 &&
     (((cellY - offsetY) % stride) + stride) % stride === 0
   );
+}
+
+/** Cells between individuals of a species, given the placement grid's spacing. */
+export function speciesStride(species: Species, cellSize: number): number {
+  return Math.max(1, Math.round(species.spacing / cellSize));
+}
+
+/**
+ * A species' fixed offset on its own grid, so they do not all land on the same
+ * cells.
+ *
+ * Exported because the placement walk enumerates these grids directly rather
+ * than testing every cell against them, and the two have to agree exactly. A
+ * walk offset by even one cell from the test finds nothing at all.
+ */
+export function speciesGridOffset(species: Species, stride: number): [number, number] {
+  let hash = 0;
+  for (let i = 0; i < species.id.length; i++) {
+    hash = (hash * 31 + species.id.charCodeAt(i)) | 0;
+  }
+
+  return [
+    ((hash % stride) + stride) % stride,
+    (((hash >> 8) % stride) + stride) % stride,
+  ];
 }
 
 /**
