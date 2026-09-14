@@ -25,11 +25,13 @@ import { FACE_COUNT, faceToDirection } from './cubeSphere.js';
  * Split while the camera is nearer than this many chunk widths.
  *
  * Higher means more, smaller chunks: better silhouettes and more draw calls.
- * At 2.5 the terrain a launch actually looks down on was four times coarser
- * than it needed to be — the chunk budget went on detail directly underfoot
- * that nothing was looking at.
+ * At 2.5 the terrain a launch actually looks down on was coarser than it
+ * needed to be. At 4 the tree asks for nearly three thousand chunks from low
+ * altitude, which does not fit a budget that can be built while flying — and
+ * a budget that binds is worse than a coarser ratio, because it starves whole
+ * branches and leaves neighbouring chunks levels apart.
  */
-export const SPLIT_RATIO = 4;
+export const SPLIT_RATIO = 3;
 
 /** Deepest subdivision. At Terrin's radius this is a few metres across. */
 export const MAX_DEPTH = 14;
@@ -102,22 +104,37 @@ export interface SelectionOptions {
  *
  * Returns leaves only, ordered coarse to fine, with neighbouring leaves within
  * one level of each other.
+ *
+ * `maxChunks` is a target rather than a hard ceiling. A node that cannot afford
+ * to split emits itself as a leaf, and the last few of those can carry the
+ * total slightly past the limit — which is the correct trade, because the
+ * alternative is a hole in the planet.
  */
 export function selectChunks(options: SelectionOptions): Chunk[] {
   const splitRatio = options.splitRatio ?? SPLIT_RATIO;
   const maxDepth = options.maxDepth ?? MAX_DEPTH;
-  // Beyond about this many, subdivision depth saturates and further chunks buy
-  // no detail at any altitude — only generation time.
-  const maxChunks = options.maxChunks ?? 900;
+  // Comfortably above what the split ratio actually asks for, so the budget
+  // does not bind in normal flight. It binding is not a graceful degradation:
+  // the walk is depth-first, so the faces it reaches first take the whole
+  // allowance and the rest are left coarse. Measured at eleven levels between
+  // neighbours, which no skirt can bridge and which reads as flat plates with
+  // hard straight edges across the landscape.
+  const maxChunks = options.maxChunks ?? 2_600;
 
   const selected: Chunk[] = [];
 
   const visit = (id: ChunkId): void => {
-    if (selected.length >= maxChunks) return;
-
     const chunk = makeChunk(id, options.planetRadius);
 
+    // Running out of budget must coarsen the terrain, never puncture it.
+    // Returning here instead of emitting a leaf abandons the whole subtree and
+    // leaves nothing covering that part of the planet at all — measured at
+    // 96.6% of the sphere uncovered, which reads as huge flat plates of
+    // whatever is behind the terrain, seen through the gaps.
+    const budgetLeft = selected.length + 4 <= maxChunks;
+
     if (
+      budgetLeft &&
       id.depth < maxDepth &&
       shouldSplit(chunk, options.camera, options.planetRadius, splitRatio)
     ) {

@@ -359,14 +359,17 @@ describe('chunk selection', () => {
     }
   });
 
-  it('respects the chunk budget', () => {
+  it('respects the chunk budget approximately', () => {
+    // A target, not a ceiling. A node that cannot afford to split emits itself
+    // as a leaf instead, and the last few of those can carry the total a little
+    // past the limit — which beats the alternative of a hole in the planet.
     const chunks = selectChunks({
       planetRadius: PLANET_RADIUS,
       camera: surface,
       maxChunks: 64,
     });
 
-    expect(chunks.length).toBeLessThanOrEqual(64);
+    expect(chunks.length).toBeLessThan(64 * 1.5);
   });
 
   it('selects more chunks as the camera descends', () => {
@@ -532,5 +535,80 @@ describe('terrain in the rotating frame', () => {
     expect(result.elements.periapsis - TERRIN.radius).toBeGreaterThan(
       TERRIN.atmosphere!.height,
     );
+  });
+});
+
+describe('chunk selection under a real budget', () => {
+  /** Every altitude a launch passes through, at the shipped settings. */
+  const ALTITUDES = [200, 2_000, 10_000, 76_000, 400_000];
+
+  function selectionAt(altitude: number) {
+    const site = TERRIN.launchSite.normalized();
+    return selectChunks({
+      planetRadius: TERRIN.radius,
+      camera: site.scale(TERRIN.radius + altitude),
+    });
+  }
+
+  it('covers the whole sphere at every altitude', () => {
+    // Running out of budget must coarsen the terrain, never puncture it. The
+    // first version returned early instead of emitting a leaf, abandoning the
+    // subtree — 96.6% of the planet had no chunk at all, which showed as flat
+    // plates of whatever was behind the terrain.
+    for (const altitude of ALTITUDES) {
+      const chunks = selectionAt(altitude);
+
+      let missing = 0;
+      for (const direction of sampleDirections(600)) {
+        const { face, u, v } = directionToFace(direction);
+        const covered = chunks.some(
+          (c) => c.face === face && u >= c.u0 && u <= c.u1 && v >= c.v0 && v <= c.v1,
+        );
+        if (!covered) missing++;
+      }
+
+      expect(missing, `${missing} uncovered directions at ${altitude} m`).toBe(0);
+    }
+  });
+
+  it('keeps neighbours within one level at every altitude', () => {
+    // The earlier test for this capped depth at 6, which never reached the
+    // chunk budget — and the budget is exactly what breaks it. The walk is
+    // depth-first, so when it binds, the faces reached first take the whole
+    // allowance: measured at eleven levels between neighbours, a gap no skirt
+    // can bridge.
+    for (const altitude of ALTITUDES) {
+      expect(
+        maxNeighbourLevelDifference(selectionAt(altitude)),
+        `level gap at ${altitude} m`,
+      ).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('leaves the budget room to spare in normal flight', () => {
+    // A budget that binds is not graceful degradation, so the ratio and the
+    // cap have to be chosen together. This is the check that the pair still
+    // suit each other.
+    for (const altitude of ALTITUDES) {
+      expect(selectionAt(altitude).length, `chunks at ${altitude} m`).toBeLessThan(2_400);
+    }
+  });
+
+  it('resolves the ground more finely the closer the camera gets', () => {
+    const sizeUnderCamera = (altitude: number): number => {
+      const site = TERRIN.launchSite.normalized();
+      const { face, u, v } = directionToFace(site);
+      const chunk = selectionAt(altitude).find(
+        (c) => c.face === face && u >= c.u0 && u <= c.u1 && v >= c.v0 && v <= c.v1,
+      );
+      return chunk!.size;
+    };
+
+    let previous = Infinity;
+    for (const altitude of [400_000, 76_000, 10_000, 2_000, 200]) {
+      const size = sizeUnderCamera(altitude);
+      expect(size).toBeLessThan(previous);
+      previous = size;
+    }
   });
 });
