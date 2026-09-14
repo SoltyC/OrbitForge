@@ -103,8 +103,14 @@ export class SystemView {
       if (!terrain) continue;
 
       const relative = relativeToBody(entry.body, vesselBody, vesselPosition, time);
-      terrain.update(unrotate(entry.body, relative, time));
+      const local = unrotate(entry.body, relative, time);
+
+      terrain.update(local);
       terrain.step();
+
+      // Flora lives in the same body-fixed frame the terrain does.
+      entry.view.vegetation?.update(local);
+      entry.view.vegetation?.step();
     }
   }
 
@@ -132,6 +138,7 @@ export class SystemView {
     return this.entries.flatMap((entry) => {
       const objects: Object3D[] = [entry.view.surface];
       if (entry.view.terrain) objects.push(entry.view.terrain.group);
+      if (entry.view.vegetation) objects.push(entry.view.vegetation.group);
       if (entry.orbitLine) objects.push(entry.orbitLine);
       return objects;
     });

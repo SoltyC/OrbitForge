@@ -12,6 +12,7 @@ import type { Body } from '../bodies/types.js';
 import { createSkyView } from './atmosphere/skyMaterial.js';
 import type { SkyView } from './atmosphere/skyMaterial.js';
 import { TerrainView } from './terrain/terrainView.js';
+import { VegetationView } from './vegetation/vegetationView.js';
 
 /** Latitude/longitude segments on the placeholder sphere. */
 const SPHERE_SEGMENTS = 128;
@@ -26,6 +27,8 @@ export interface PlanetView {
   readonly sky: SkyView | null;
   /** Present only for bodies with a terrain profile. */
   readonly terrain: TerrainView | null;
+  /** Present only where terrain exists for plants to stand on. */
+  readonly vegetation: VegetationView | null;
 }
 
 export function createPlanetView(body: Body): PlanetView {
@@ -72,6 +75,13 @@ export function createPlanetView(body: Body): PlanetView {
   const terrain = body.terrain ? new TerrainView(body.radius, body.terrain) : null;
   if (terrain) group.add(terrain.group);
 
+  // Flora needs ground to stand on, so it follows the terrain — including its
+  // rotation, applied below alongside it.
+  const vegetation = body.terrain
+    ? new VegetationView(body.radius, body.terrain)
+    : null;
+  if (vegetation) group.add(vegetation.group);
+
   const model = createAtmosphereModel(body);
   // Clouds live in the sky pass, so the layer is described per body here.
   const sky = model
@@ -79,7 +89,7 @@ export function createPlanetView(body: Body): PlanetView {
     : null;
   if (sky) group.add(sky.mesh);
 
-  return { group, surface, sky, terrain };
+  return { group, surface, sky, terrain, vegetation };
 }
 
 /**
@@ -94,4 +104,5 @@ export function updatePlanetRotation(view: PlanetView, body: Body, time: number)
 
   view.surface.rotation.y = angle;
   if (view.terrain) view.terrain.group.rotation.z = angle;
+  if (view.vegetation) view.vegetation.group.rotation.z = angle;
 }
