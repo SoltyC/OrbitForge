@@ -63,8 +63,14 @@ export function createPlanetView(body: Body): PlanetView {
   // Real terrain replaces the placeholder sphere where a body has a profile.
   // The sphere stays for bodies that do not, and as the thing terrain chunks
   // are drawn over until they have been generated.
+  //
+  // Attached to the planet, not to the spin frame. That frame exists only to
+  // tilt SphereGeometry's Y-poles onto the +Z axis the simulation spins about,
+  // and terrain chunks are already built in those coordinates — parenting them
+  // there rotates the whole landscape ninety degrees off the planet it belongs
+  // to. It carries its own rotation instead, applied below.
   const terrain = body.terrain ? new TerrainView(body.radius, body.terrain) : null;
-  if (terrain) spinFrame.add(terrain.group);
+  if (terrain) group.add(terrain.group);
 
   const model = createAtmosphereModel(body);
   // Clouds live in the sky pass, so the layer is described per body here.
@@ -77,10 +83,15 @@ export function createPlanetView(body: Body): PlanetView {
 }
 
 /**
- * Rotate the planet to match elapsed mission time. Inside the tilted spin
- * frame, local +Y is world +Z, so this spins about the correct axis.
+ * Rotate the planet to match elapsed mission time.
+ *
+ * Two rotations for the same spin, because the two meshes live in different
+ * frames. Inside the tilted spin frame the sphere's local +Y is world +Z; the
+ * terrain is already in world axes and turns about Z directly.
  */
 export function updatePlanetRotation(view: PlanetView, body: Body, time: number): void {
   const angle = (2 * Math.PI * time) / body.rotationPeriod;
+
   view.surface.rotation.y = angle;
+  if (view.terrain) view.terrain.group.rotation.z = angle;
 }
