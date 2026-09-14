@@ -5,6 +5,8 @@
 import type { Body } from '../bodies/types.js';
 import { groundRadiusAt } from './forces.js';
 import { Quat } from './quat.js';
+import { AMBIENT_THERMAL } from './heating.js';
+import type { ThermalState } from './heating.js';
 import type { RailsState } from './rails.js';
 import { Vec3 } from './vec3.js';
 import type { Vessel } from './vessel.js';
@@ -35,6 +37,8 @@ export interface FlightState {
    * carried forward exactly instead of being re-derived each step.
    */
   readonly rails: RailsState | null;
+  /** Skin temperature and heat shield, from aerodynamic heating. */
+  readonly thermal: ThermalState;
 }
 
 /** Local vessel axis that thrust acts along, before rotation. */
@@ -108,5 +112,6 @@ export function createPrelaunchState(
     regime: 'prelaunch',
     body,
     rails: null,
+    thermal: AMBIENT_THERMAL,
   };
 }

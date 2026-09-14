@@ -221,7 +221,7 @@ async function main(): Promise<void> {
     const hostCentre = system.positionOf(current.body.id);
     if (hostCentre) orbit.group.position.copy(hostCentre);
 
-    updateVesselView(vessel, current.orientation, current.throttle);
+    updateVesselView(vessel, current.orientation, current.throttle, current.thermal);
 
     const elements = elementsFromState(
       current.position,

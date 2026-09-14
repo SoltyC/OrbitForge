@@ -4,7 +4,7 @@ A rocket construction and spaceflight simulator with real orbital mechanics, in 
 browser. Think Kerbal Space Program: build a rocket, fly it, and have actual physics
 decide whether you make orbit.
 
-**Status: milestone 7 of 9.** The simulation flies a complete multi-body mission.
+**Status: milestone 9 of 9, in progress.** The simulation flies a complete multi-body mission.
 Build a rocket in the VAB, launch it, reach orbit, wait for a transfer window, burn for
 the moon, cross into its sphere of influence, and land — all under patched-conic gravity
 with analytic time-warp. Coasting vessels go *on rails*, propagating in closed form: 24
@@ -161,6 +161,8 @@ ground truth the game is supposed to match.
 | Transmittance | `T = exp(-∫ σ dt)`, with `σ` from Rayleigh + Mie + ozone |
 | Rayleigh phase | `(3/16π)(1 + cos²θ)` |
 | Mie phase | Henyey-Greenstein, `g = 0.8` |
+| Reentry heating | Sutton-Graves, `q = k·√(ρ/R)·v³` |
+| Radiative cooling | Stefan-Boltzmann, `σεT⁴` |
 
 ## Layout
 
@@ -171,6 +173,7 @@ src/
   atmosphere/ # scattering model, transmittance LUT — no Three.js
   clouds/   # noise, density field, lighting, raymarch — no Three.js
   terrain/  # cube-sphere, height field, quadtree, chunk meshing — no Three.js
+  vegetation/ # species, plant geometry, scatter, placement — no Three.js
   bodies/   # celestial body definitions and ephemeris
   editor/   # the VAB: craft view, panels, click-to-place
   render/   # WebGPU renderer, floating origin, planet/vessel/stars/orbit lines

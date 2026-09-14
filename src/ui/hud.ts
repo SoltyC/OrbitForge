@@ -38,6 +38,8 @@ const FIELDS = [
   'deltaV',
   'twr',
   'mass',
+  'skinTemp',
+  'heatShield',
 ] as const;
 
 type FieldName = (typeof FIELDS)[number];
@@ -63,6 +65,8 @@ const LABELS: Record<FieldName, string> = {
   deltaV: 'Delta-v remaining',
   twr: 'TWR',
   mass: 'Mass',
+  skinTemp: 'Skin temp',
+  heatShield: 'Heat shield',
 };
 
 export class Hud {
@@ -127,6 +131,8 @@ export class Hud {
     this.set('deltaV', `${totalDeltaV(state.vessel, ambient).toFixed(0)} m/s`);
     this.set('twr', thrustToWeight(state.vessel, gravity, ambient, state.throttle).toFixed(2));
     this.set('mass', `${(vesselMass(state.vessel) / 1000).toFixed(2)} t`);
+    this.set('skinTemp', `${state.thermal.temperature.toFixed(0)} K`);
+    this.set('heatShield', `${(state.thermal.shield * 100).toFixed(0)}%`);
   }
 
   private set(field: FieldName, text: string): void {

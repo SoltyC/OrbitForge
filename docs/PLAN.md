@@ -196,8 +196,8 @@ Physics is deterministic → test it hard (targets your 80% floor where it matte
 | **5** | ✅ **Atmosphere & sky** — Rayleigh/Mie/ozone scattering, transmittance LUT, sunsets, orbital limb. | The sky sells the planet. | First "wow." |
 | **6** | ✅ **Volumetric clouds** — raymarched layer, weather map, baked noise volumes, half-res pass. | Clouds affordable + beautiful during ascent/reentry. | Big visual jump. |
 | **7** | ✅ **Terrain LOD** — cube-sphere quadtree, ridged height field, chunked meshing with skirts. | Real surfaces to land on, no popping. | Non-low-poly ground. |
-| **8** | **Vegetation & surface detail** — instanced scatter, LOD/impostors, wind, ground detail. | Homeworld surface looks alive. | Target visual quality reached. |
-| **9** | **Polish** — reentry heating FX, engine plumes, sound, camera work, UX. | Ships. | — |
+| **8** | ✅ **Vegetation** — eight procedural species, instanced with per-band LOD. | Homeworld surface looks alive. | Target visual quality reached. |
+| **9** | **Polish** — ✅ reentry heating; engine plumes, sound, camera work, UX outstanding. | Ships. | — |
 
 **Rule:** finish milestone 1 (a correct orbit) before touching any milestone-5+ graphics. A jittery orbit under a gorgeous sky still feels broken; a solid orbit under a plain sky feels like a simulator.
 

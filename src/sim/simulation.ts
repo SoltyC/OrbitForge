@@ -30,6 +30,7 @@ import {
   maxSafeRailsTimestep,
   railsToCartesian,
 } from './rails.js';
+import { heatingConditions, stepHeating } from './heating.js';
 import { resolveSoi } from './soi.js';
 import type { Body } from '../bodies/types.js';
 import type { TranslationalState } from './integrator.js';
@@ -160,6 +161,8 @@ function stepOnRails(
       angularVelocity: Vec3.ZERO,
       throttle: 0,
       rails: advanced,
+      // On rails the vessel is in vacuum by definition, so it only cools.
+      thermal: stepHeating(state.thermal, 0, safeDt).thermal,
       regime: 'onRails',
       time: state.time + safeDt,
     },
@@ -187,6 +190,15 @@ function stepIntegrated(
   const translational = integrateTranslation(staged, axis, thrustMagnitude, dt);
   const grounded = resolveGroundContact(staged, translational, thrustMagnitude);
 
+  // Heating is read after the step, from where the vessel ended up.
+  const heating = heatingConditions(
+    staged.body,
+    grounded.state.position,
+    grounded.state.velocity,
+    noseRadiusOf(staged.vessel),
+  );
+  const thermal = stepHeating(staged.thermal, heating.flux, dt).thermal;
+
   return {
     state: {
       ...staged,
@@ -196,12 +208,28 @@ function stepIntegrated(
       throttle,
       time: staged.time + dt,
       regime: grounded.regime,
+      thermal,
       // Any integrated step invalidates the frozen orbit.
       rails: null,
     },
     command,
     advanced: dt,
   };
+}
+
+/**
+ * Radius of curvature of the leading surface (m).
+ *
+ * Taken from the widest part, because that is what the shock stands off from.
+ * Heating goes as its inverse square root, so a broad craft is markedly cooler
+ * than a narrow one at the same speed.
+ */
+function noseRadiusOf(vessel: FlightState['vessel']): number {
+  let widest = 0;
+  for (const stage of vessel.stages) {
+    for (const part of stage.parts) widest = Math.max(widest, part.diameter);
+  }
+  return Math.max(0.1, widest / 2);
 }
 
 /** Throttle is zero without a live engine or propellant, whatever was asked. */
